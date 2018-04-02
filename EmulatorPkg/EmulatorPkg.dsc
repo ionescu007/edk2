@@ -4,7 +4,7 @@
 # The Emulation Platform can be used to debug individual modules, prior to creating
 # a real platform. This also provides an example for how an DSC is created.
 #
-# Copyright (c) 2006 - 2017, Intel Corporation. All rights reserved.<BR>
+# Copyright (c) 2006 - 2018, Intel Corporation. All rights reserved.<BR>
 # Portions copyright (c) 2010 - 2011, Apple Inc. All rights reserved.<BR>
 #
 # This program and the accompanying materials
@@ -83,6 +83,8 @@
   DpcLib|MdeModulePkg/Library/DxeDpcLib/DxeDpcLib.inf
   OemHookStatusCodeLib|MdeModulePkg/Library/OemHookStatusCodeLibNull/OemHookStatusCodeLibNull.inf
   GenericBdsLib|IntelFrameworkModulePkg/Library/GenericBdsLib/GenericBdsLib.inf
+  BmpSupportLib|MdeModulePkg/Library/BaseBmpSupportLib/BaseBmpSupportLib.inf
+  SafeIntLib|MdePkg/Library/BaseSafeIntLib/BaseSafeIntLib.inf
   CustomizedDisplayLib|MdeModulePkg/Library/CustomizedDisplayLib/CustomizedDisplayLib.inf
   SecurityManagementLib|MdeModulePkg/Library/DxeSecurityManagementLib/DxeSecurityManagementLib.inf
   TimerLib|MdePkg/Library/BaseTimerLibNullTemplate/BaseTimerLibNullTemplate.inf
@@ -109,6 +111,8 @@
   VarCheckLib|MdeModulePkg/Library/VarCheckLib/VarCheckLib.inf
   SortLib|MdeModulePkg/Library/BaseSortLib/BaseSortLib.inf
   UefiBootManagerLib|MdeModulePkg/Library/UefiBootManagerLib/UefiBootManagerLib.inf
+  ShellLib|ShellPkg/Library/UefiShellLib/UefiShellLib.inf
+  FileHandleLib|MdePkg/Library/UefiFileHandleLib/UefiFileHandleLib.inf
 
 [LibraryClasses.common.SEC]
   PeiServicesLib|EmulatorPkg/Library/SecPeiServicesLib/SecPeiServicesLib.inf
@@ -378,6 +382,10 @@
   FatPkg/EnhancedFatDxe/Fat.inf
 
 !ifndef $(USE_OLD_SHELL)
+  ShellPkg/DynamicCommand/TftpDynamicCommand/TftpDynamicCommand.inf {
+    <PcdsFixedAtBuild>
+      gEfiShellPkgTokenSpaceGuid.PcdShellLibAutoInitialize|FALSE
+  }
   ShellPkg/Application/Shell/Shell.inf {
     <LibraryClasses>
       ShellCommandLib|ShellPkg/Library/UefiShellCommandLib/UefiShellCommandLib.inf
@@ -388,12 +396,8 @@
       NULL|ShellPkg/Library/UefiShellDebug1CommandsLib/UefiShellDebug1CommandsLib.inf
       NULL|ShellPkg/Library/UefiShellInstall1CommandsLib/UefiShellInstall1CommandsLib.inf
       NULL|ShellPkg/Library/UefiShellNetwork1CommandsLib/UefiShellNetwork1CommandsLib.inf
-      NULL|ShellPkg/Library/UefiShellTftpCommandLib/UefiShellTftpCommandLib.inf
       HandleParsingLib|ShellPkg/Library/UefiHandleParsingLib/UefiHandleParsingLib.inf
-      ShellLib|ShellPkg/Library/UefiShellLib/UefiShellLib.inf
-      FileHandleLib|MdePkg/Library/UefiFileHandleLib/UefiFileHandleLib.inf
       SortLib|MdeModulePkg/Library/UefiSortLib/UefiSortLib.inf
-      UefiBootManagerLib|MdeModulePkg/Library/UefiBootManagerLib/UefiBootManagerLib.inf
       PrintLib|MdePkg/Library/BasePrintLib/BasePrintLib.inf
 #      SafeBlockIoLib|ShellPkg/Library/SafeBlockIoLib/SafeBlockIoLib.inf
 #      SafeOpenProtocolLib|ShellPkg/Library/SafeOpenProtocolLib/SafeOpenProtocolLib.inf

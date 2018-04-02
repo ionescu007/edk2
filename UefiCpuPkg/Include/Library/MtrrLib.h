@@ -1,7 +1,7 @@
 /** @file
   MTRR setting library
 
-  Copyright (c) 2008 - 2017, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2008 - 2018, Intel Corporation. All rights reserved.<BR>
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
   which accompanies this distribution.  The full text of the license may be found at
@@ -103,6 +103,12 @@ typedef enum {
 #define  MTRR_CACHE_WRITE_BACK       6
 #define  MTRR_CACHE_INVALID_TYPE     7
 
+typedef struct {
+  UINT64                 BaseAddress;
+  UINT64                 Length;
+  MTRR_MEMORY_CACHE_TYPE Type;
+} MTRR_MEMORY_RANGE;
+
 /**
   Returns the variable MTRR count for the CPU.
 
@@ -151,7 +157,14 @@ GetFirmwareVariableMtrrCount (
   @retval RETURN_OUT_OF_RESOURCES   There are not enough system resources to
                                     modify the attributes of the memory
                                     resource range.
-
+                                    Multiple memory range attributes setting by calling this API multiple
+                                    times may fail with status RETURN_OUT_OF_RESOURCES. It may not mean
+                                    the number of CPU MTRRs are too small to set such memory attributes.
+                                    Pass the multiple memory range attributes to one call of
+                                    MtrrSetMemoryAttributesInMtrrSettings() may succeed.
+  @retval RETURN_BUFFER_TOO_SMALL   The fixed internal scratch buffer is too small for MTRR calculation.
+                                    Caller should use MtrrSetMemoryAttributesInMtrrSettings() to specify
+                                    external scratch buffer.
 **/
 RETURN_STATUS
 EFIAPI
@@ -346,7 +359,14 @@ MtrrGetDefaultMemoryType (
                                     BaseAddress and Length cannot be modified.
   @retval RETURN_OUT_OF_RESOURCES   There are not enough system resources to modify the attributes of
                                     the memory resource range.
-
+                                    Multiple memory range attributes setting by calling this API multiple
+                                    times may fail with status RETURN_OUT_OF_RESOURCES. It may not mean
+                                    the number of CPU MTRRs are too small to set such memory attributes.
+                                    Pass the multiple memory range attributes to one call of
+                                    MtrrSetMemoryAttributesInMtrrSettings() may succeed.
+  @retval RETURN_BUFFER_TOO_SMALL   The fixed internal scratch buffer is too small for MTRR calculation.
+                                    Caller should use MtrrSetMemoryAttributesInMtrrSettings() to specify
+                                    external scratch buffer.
 **/
 RETURN_STATUS
 EFIAPI
@@ -357,4 +377,39 @@ MtrrSetMemoryAttributeInMtrrSettings (
   IN MTRR_MEMORY_CACHE_TYPE  Attribute
   );
 
+/**
+  This function attempts to set the attributes into MTRR setting buffer for multiple memory ranges.
+
+  @param[in, out]  MtrrSetting  MTRR setting buffer to be set.
+  @param[in]       Scratch      A temporary scratch buffer that is used to perform the calculation.
+  @param[in, out]  ScratchSize  Pointer to the size in bytes of the scratch buffer.
+                                It may be updated to the actual required size when the calculation
+                                needs more scratch buffer.
+  @param[in]       Ranges       Pointer to an array of MTRR_MEMORY_RANGE.
+                                When range overlap happens, the last one takes higher priority.
+                                When the function returns, either all the attributes are set successfully,
+                                or none of them is set.
+  @param[in]      RangeCount    Count of MTRR_MEMORY_RANGE.
+
+  @retval RETURN_SUCCESS            The attributes were set for all the memory ranges.
+  @retval RETURN_INVALID_PARAMETER  Length in any range is zero.
+  @retval RETURN_UNSUPPORTED        The processor does not support one or more bytes of the
+                                    memory resource range specified by BaseAddress and Length in any range.
+  @retval RETURN_UNSUPPORTED        The bit mask of attributes is not support for the memory resource
+                                    range specified by BaseAddress and Length in any range.
+  @retval RETURN_OUT_OF_RESOURCES   There are not enough system resources to modify the attributes of
+                                    the memory resource ranges.
+  @retval RETURN_ACCESS_DENIED      The attributes for the memory resource range specified by
+                                    BaseAddress and Length cannot be modified.
+  @retval RETURN_BUFFER_TOO_SMALL   The scratch buffer is too small for MTRR calculation.
+**/
+RETURN_STATUS
+EFIAPI
+MtrrSetMemoryAttributesInMtrrSettings (
+  IN OUT MTRR_SETTINGS           *MtrrSetting,
+  IN     VOID                    *Scratch,
+  IN OUT UINTN                   *ScratchSize,
+  IN     CONST MTRR_MEMORY_RANGE *Ranges,
+  IN     UINTN                   RangeCount
+  );
 #endif // _MTRR_LIB_H_

@@ -679,6 +679,7 @@ SmmVariableHandler (
         break;
       }
       if (!mEndOfDxe) {
+        MorLockInitAtEndOfDxe ();
         mEndOfDxe = TRUE;
         VarCheckLibInitializeAtEndOfDxe (NULL);
         //
@@ -811,6 +812,7 @@ SmmEndOfDxeCallback (
   )
 {
   DEBUG ((EFI_D_INFO, "[Variable]SMM_END_OF_DXE is signaled\n"));
+  MorLockInitAtEndOfDxe ();
   mEndOfDxe = TRUE;
   VarCheckLibInitializeAtEndOfDxe (NULL);
   //
@@ -953,7 +955,7 @@ VariableServiceInitialize (
                     );
   ASSERT_EFI_ERROR (Status);
 
-  mVariableBufferPayloadSize = GetNonVolatileMaxVariableSize () +
+  mVariableBufferPayloadSize = GetMaxVariableSize () +
                                OFFSET_OF (SMM_VARIABLE_COMMUNICATE_VAR_CHECK_VARIABLE_PROPERTY, Name) - GetVariableHeaderSize ();
 
   Status = gSmst->SmmAllocatePool (

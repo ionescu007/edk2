@@ -1,7 +1,7 @@
 #/** @file
 #
 #  Copyright (c) 2008 - 2010, Apple Inc. All rights reserved.<BR>
-#  Copyright (c) 2012 - 2015, ARM Ltd. All rights reserved.<BR>
+#  Copyright (c) 2012 - 2017, ARM Ltd. All rights reserved.<BR>
 #
 #  This program and the accompanying materials
 #  are licensed and made available under the terms and conditions of the BSD License
@@ -16,7 +16,7 @@
 [Defines]
   INF_VERSION                    = 0x00010005
   BASE_NAME                      = ArmGicDxe
-  FILE_GUID                      = DE371F7C-DEC4-4D21-ADF1-593ABCC15882
+  FILE_GUID                      = DE371F7C-DEC4-4D21-ADF1-593ABCC15882 # gArmGicDxeFileGuid
   MODULE_TYPE                    = DXE_DRIVER
   VERSION_STRING                 = 1.0
 
@@ -45,9 +45,11 @@
   UefiDriverEntryPoint
   IoLib
   PcdLib
+  UefiLib
 
 [Protocols]
   gHardwareInterruptProtocolGuid
+  gHardwareInterrupt2ProtocolGuid
   gEfiCpuArchProtocolGuid
 
 [Pcd.common]
@@ -57,4 +59,4 @@
   gArmTokenSpaceGuid.PcdArmGicV3WithV2Legacy
 
 [Depex]
-  gEfiCpuArchProtocolGuid
+  TRUE

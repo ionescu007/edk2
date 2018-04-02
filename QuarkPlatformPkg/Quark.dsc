@@ -2,7 +2,7 @@
 # Clanton Peak CRB platform with 32-bit DXE for 4MB/8MB flash devices.
 #
 # This package provides Clanton Peak CRB platform specific modules.
-# Copyright (c) 2013 - 2017 Intel Corporation.
+# Copyright (c) 2013 - 2018 Intel Corporation.
 #
 # This program and the accompanying materials
 # are licensed and made available under the terms and conditions of the BSD License
@@ -163,6 +163,9 @@
   PerformanceLib|MdePkg/Library/BasePerformanceLibNull/BasePerformanceLibNull.inf
 !endif
 
+  ShellLib|ShellPkg/Library/UefiShellLib/UefiShellLib.inf
+  FileHandleLib|MdePkg/Library/UefiFileHandleLib/UefiFileHandleLib.inf
+
   OpensslLib|CryptoPkg/Library/OpensslLib/OpensslLib.inf
   IntrinsicLib|CryptoPkg/Library/IntrinsicLib/IntrinsicLib.inf
   BaseCryptLib|CryptoPkg/Library/BaseCryptLib/BaseCryptLib.inf
@@ -228,6 +231,8 @@
 
 !if $(CAPSULE_ENABLE)
   CapsuleLib|MdeModulePkg/Library/DxeCapsuleLibFmp/DxeCapsuleLib.inf
+  BmpSupportLib|MdeModulePkg/Library/BaseBmpSupportLib/BaseBmpSupportLib.inf
+  SafeIntLib|MdePkg/Library/BaseSafeIntLib/BaseSafeIntLib.inf
 !else
   CapsuleLib|MdeModulePkg/Library/DxeCapsuleLibNull/DxeCapsuleLibNull.inf
 !endif
@@ -614,7 +619,7 @@
   # Trusted Platform Module
   #
 !if $(MEASURED_BOOT_ENABLE)
-  SecurityPkg/Tcg/TrEEConfig/TrEEConfigPei.inf
+  SecurityPkg/Tcg/Tcg2Config/Tcg2ConfigPei.inf
   SecurityPkg/Tcg/TcgPei/TcgPei.inf
 !endif
 
@@ -864,9 +869,6 @@
   MdeModulePkg/Universal/Disk/DiskIoDxe/DiskIoDxe.inf
   MdeModulePkg/Universal/Disk/PartitionDxe/PartitionDxe.inf
   FatPkg/EnhancedFatDxe/Fat.inf
-!if $(PERFORMANCE_ENABLE)
-  MdeModulePkg/Universal/FvSimpleFileSystemDxe/FvSimpleFileSystemDxe.inf
-!endif
 
   #
   # Capsule update
@@ -887,10 +889,11 @@
   # Performance Application
   #
 !if $(PERFORMANCE_ENABLE)
-  PerformancePkg/Dp_App/Dp.inf {
+  ShellPkg/DynamicCommand/DpDynamicCommand/DpDynamicCommand.inf {
+    <PcdsFixedAtBuild>
+      gEfiShellPkgTokenSpaceGuid.PcdShellLibAutoInitialize|FALSE
     <LibraryClasses>
-      ShellLib|ShellPkg/Library/UefiShellLib/UefiShellLib.inf
-      FileHandleLib|MdePkg/Library/UefiFileHandleLib/UefiFileHandleLib.inf
+      PerformanceLib|MdeModulePkg/Library/DxeSmmPerformanceLib/DxeSmmPerformanceLib.inf
   }
 !endif
 
@@ -910,8 +913,6 @@
       NULL|ShellPkg/Library/UefiShellInstall1CommandsLib/UefiShellInstall1CommandsLib.inf
       NULL|ShellPkg/Library/UefiShellNetwork1CommandsLib/UefiShellNetwork1CommandsLib.inf
       HandleParsingLib|ShellPkg/Library/UefiHandleParsingLib/UefiHandleParsingLib.inf
-      ShellLib|ShellPkg/Library/UefiShellLib/UefiShellLib.inf
-      FileHandleLib|MdePkg/Library/UefiFileHandleLib/UefiFileHandleLib.inf
       PrintLib|MdePkg/Library/BasePrintLib/BasePrintLib.inf
       BcfgCommandLib|ShellPkg/Library/UefiShellBcfgCommandLib/UefiShellBcfgCommandLib.inf
 
@@ -922,7 +923,7 @@
   }
 
 !if $(CAPSULE_ENABLE)
-  MdeModulePkg/Universal/EsrtDxe/EsrtDxe.inf
+  MdeModulePkg/Universal/EsrtFmpDxe/EsrtFmpDxe.inf
 
   SignedCapsulePkg/Universal/SystemFirmwareUpdate/SystemFirmwareReportDxe.inf {
     <LibraryClasses>

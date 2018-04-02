@@ -2,7 +2,7 @@
   Functions implementation related with DHCPv6 for UefiPxeBc Driver.
 
   (C) Copyright 2014 Hewlett-Packard Development Company, L.P.<BR>
-  Copyright (c) 2009 - 2017, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2009 - 2018, Intel Corporation. All rights reserved.<BR>
 
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
@@ -548,6 +548,7 @@ PxeBcExtractBootFileUrl (
     if (ModeStr != NULL && *(ModeStr + AsciiStrLen (";mode=octet")) == '\0') {
       *ModeStr = '\0';
     } else if (AsciiStrStr (BootFileNamePtr, ";mode=") != NULL) {
+      FreePool (TmpStr);
       return EFI_INVALID_PARAMETER;
     }
 
@@ -1005,7 +1006,7 @@ PxeBcRequestBootService (
                     );
 
   if (EFI_ERROR (Status)) {
-    return Status;
+    goto ON_ERROR;
   }
 
   //
@@ -1020,7 +1021,7 @@ PxeBcRequestBootService (
   //
   Status = Private->Udp6Read->Configure (Private->Udp6Read, &Private->Udp6CfgData);
   if (EFI_ERROR (Status)) {
-    return Status;
+    goto ON_ERROR;
   }
     
   Status = PxeBc->UdpRead (
@@ -1041,7 +1042,7 @@ PxeBcRequestBootService (
   Private->Udp6Read->Configure (Private->Udp6Read, NULL);
 
   if (EFI_ERROR (Status)) {
-    return Status;
+    goto ON_ERROR;
   }
 
   //
@@ -1050,6 +1051,13 @@ PxeBcRequestBootService (
   Reply->Length = (UINT32) ReadSize;
 
   return EFI_SUCCESS;
+  
+ON_ERROR:
+  if (Discover != NULL) {
+    FreePool (Discover);
+  }
+
+  return Status;
 }
 
 
@@ -2030,6 +2038,9 @@ PxeBcDhcp6CallBack (
       SelectAd   = &Private->OfferBuffer[Private->SelectIndex - 1].Dhcp6.Packet.Offer;
       *NewPacket = AllocateZeroPool (SelectAd->Size);
       ASSERT (*NewPacket != NULL);
+      if (*NewPacket == NULL) {
+        return EFI_ABORTED;
+      }
       CopyMem (*NewPacket, SelectAd, SelectAd->Size);
     }
     break;
@@ -2155,7 +2166,7 @@ PxeBcDhcp6Discover (
                     (VOID *) Discover
                     );
   if (EFI_ERROR (Status)) {
-    return Status;
+    goto ON_ERROR;
   }
 
   //
@@ -2175,7 +2186,7 @@ PxeBcDhcp6Discover (
   //
   Status = Private->Udp6Read->Configure (Private->Udp6Read, &Private->Udp6CfgData);
   if (EFI_ERROR (Status)) {
-    return Status;
+    goto ON_ERROR;
   }
   
   Status = PxeBc->UdpRead (
@@ -2195,10 +2206,17 @@ PxeBcDhcp6Discover (
   //
   Private->Udp6Read->Configure (Private->Udp6Read, NULL);
   if (EFI_ERROR (Status)) {
-    return Status;
+    goto ON_ERROR;
   }
 
   return EFI_SUCCESS;
+
+ON_ERROR:
+  if (Discover != NULL) {
+    FreePool (Discover);
+  }
+
+  return Status;
 }
 
 

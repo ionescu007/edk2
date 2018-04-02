@@ -39,6 +39,7 @@
   DefaultExceptionHandlerLib|Include/Library/DefaultExceptionHandlerLib.h
   ArmDisassemblerLib|Include/Library/ArmDisassemblerLib.h
   ArmGicArchLib|Include/Library/ArmGicArchLib.h
+  ArmSvcLib|Include/Library/ArmSvcLib.h
 
 [Guids.common]
   gArmTokenSpaceGuid       = { 0xBB11ECFE, 0x820F, 0x4968, { 0xBB, 0xA6, 0xF7, 0x6A, 0xFE, 0x30, 0x25, 0x96 } }
@@ -46,6 +47,8 @@
   ## ARM MPCore table
   # Include/Guid/ArmMpCoreInfo.h
   gArmMpCoreInfoGuid = { 0xa4ee0728, 0xe5d7, 0x4ac5,  {0xb2, 0x1e, 0x65, 0x8e, 0xd8, 0x57, 0xe8, 0x34} }
+
+  gArmGicDxeFileGuid = { 0xde371f7c, 0xdec4, 0x4d21, { 0xad, 0xf1, 0x59, 0x3a, 0xbc, 0xc1, 0x58, 0x82 } }
 
 [Ppis]
   ## Include/Ppi/ArmMpCoreInfo.h
@@ -111,14 +114,6 @@
   # ARM L2x0 PCDs
   #
   gArmTokenSpaceGuid.PcdL2x0ControllerBase|0|UINT32|0x0000001B
-
-  #
-  # BdsLib
-  #
-  # The compressed Linux kernel is expected to be under 128MB from the beginning of the System Memory
-  gArmTokenSpaceGuid.PcdArmLinuxKernelMaxOffset|0x08000000|UINT32|0x0000001F
-  # Maximum file size for TFTP servers that do not support 'tsize' extension
-  gArmTokenSpaceGuid.PcdMaxTftpFileSize|0x01000000|UINT32|0x00000000
 
   #
   # ARM Normal (or Non Secure) Firmware PCDs
@@ -223,8 +218,8 @@
 [PcdsFixedAtBuild.common, PcdsDynamic.common, PcdsPatchableInModule.common]
 
   # System Memory (DRAM): These PCDs define the region of in-built system memory
-  # Some platforms can get DRAM extensions, these additional regions will be declared
-  # to UEFI by ArmPlatformLib
+  # Some platforms can get DRAM extensions, these additional regions may be
+  # declared to UEFI using separate resource descriptor HOBs
   gArmTokenSpaceGuid.PcdSystemMemoryBase|0|UINT64|0x00000029
   gArmTokenSpaceGuid.PcdSystemMemorySize|0|UINT64|0x0000002A
 

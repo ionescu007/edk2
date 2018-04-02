@@ -48,20 +48,20 @@ class UiSection (UiSectionClassObject):
     #   @param  Dict        dictionary contains macro and its value
     #   @retval tuple       (Generated file name, section alignment)
     #
-    def GenSection(self, OutputPath, ModuleName, SecNum, KeyStringList, FfsInf=None, Dict={}):
+    def GenSection(self, OutputPath, ModuleName, SecNum, KeyStringList, FfsInf=None, Dict={}, IsMakefile = False):
         #
         # Prepare the parameter of GenSection
         #
-        if FfsInf != None:
+        if FfsInf is not None:
             self.Alignment = FfsInf.__ExtendMacro__(self.Alignment)
             self.StringData = FfsInf.__ExtendMacro__(self.StringData)
             self.FileName = FfsInf.__ExtendMacro__(self.FileName)
 
         OutputFile = os.path.join(OutputPath, ModuleName + 'SEC' + SecNum + Ffs.SectionSuffix.get('UI'))
 
-        if self.StringData != None :
+        if self.StringData is not None :
             NameString = self.StringData
-        elif self.FileName != None:
+        elif self.FileName is not None:
             FileNameStr = GenFdsGlobalVariable.ReplaceWorkspaceMacro(self.FileName)
             FileNameStr = GenFdsGlobalVariable.MacroExtend(FileNameStr, Dict)
             FileObj = open(FileNameStr, 'r')
@@ -69,8 +69,7 @@ class UiSection (UiSectionClassObject):
             FileObj.close()
         else:
             NameString = ''
-
-        GenFdsGlobalVariable.GenerateSection(OutputFile, None, 'EFI_SECTION_USER_INTERFACE', Ui=NameString)
+        GenFdsGlobalVariable.GenerateSection(OutputFile, None, 'EFI_SECTION_USER_INTERFACE', Ui=NameString, IsMakefile=IsMakefile)
 
         OutputFileList = []
         OutputFileList.append(OutputFile)

@@ -1,6 +1,6 @@
 /** @file
 
-  Copyright (c) 2017, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2017 - 2018, Intel Corporation. All rights reserved.<BR>
 
   This program and the accompanying materials are licensed and made available under
   the terms and conditions of the BSD License which accompanies this distribution.
@@ -24,20 +24,25 @@
 #include <IndustryStandard/Vtd.h>
 #include <Ppi/IoMmu.h>
 #include <Ppi/VtdInfo.h>
+#include <Ppi/MemoryDiscovered.h>
 #include <Ppi/EndOfPeiPhase.h>
 
 #include "IntelVTdPmrPei.h"
 
-#define  TOTAL_DMA_BUFFER_SIZE    SIZE_4MB
-#define  TOTAL_DMA_BUFFER_SIZE_S3 SIZE_1MB
+EFI_GUID mVTdInfoGuid = {
+  0x222f5e30, 0x5cd, 0x49c6, { 0x8a, 0xc, 0x36, 0xd6, 0x58, 0x41, 0xe0, 0x82 }
+};
 
-EFI_ACPI_DMAR_HEADER              *mAcpiDmarTable;
-VTD_INFO                          *mVTdInfo;
-UINT64                            mEngineMask;
-UINTN                             mDmaBufferBase;
-UINTN                             mDmaBufferSize;
-UINTN                             mDmaBufferCurrentTop;
-UINTN                             mDmaBufferCurrentBottom;
+EFI_GUID mDmaBufferInfoGuid = {
+  0x7b624ec7, 0xfb67, 0x4f9c, { 0xb6, 0xb0, 0x4d, 0xfa, 0x9c, 0x88, 0x20, 0x39 }
+};
+
+typedef struct {
+  UINTN                             DmaBufferBase;
+  UINTN                             DmaBufferSize;
+  UINTN                             DmaBufferCurrentTop;
+  UINTN                             DmaBufferCurrentBottom;
+} DMA_BUFFER_INFO;
 
 #define MAP_INFO_SIGNATURE  SIGNATURE_32 ('D', 'M', 'A', 'P')
 typedef struct {
@@ -52,7 +57,7 @@ typedef struct {
 
   PEI Memory Layout:
 
-              +------------------+ <=============== PHMR.Limit (Top of memory)
+              +------------------+ <=============== PHMR.Limit (+ alignment) (1 << (HostAddressWidth + 1))
               |   Mem Resource   |
               |                  |
 
@@ -64,7 +69,7 @@ typedef struct {
   DMA Buffer  |   * DMA FREE *   |
        |      |  --------------  |
        V      |  Read/Write Buf  |
-  =========== +==================+ <=============== PLMR.Limit
+  =========== +==================+ <=============== PLMR.Limit (+ alignment)
               |   PEI allocated  |
               |  --------------  | <------- EfiFreeMemoryTop
               |   * PEI FREE *   |
@@ -82,7 +87,6 @@ typedef struct {
               |   Mem Resource   |
               +------------------+ <=============== PLMR.Base (0)
 **/
-
 
 /**
   Set IOMMU attribute for a system memory.
@@ -105,6 +109,8 @@ typedef struct {
   @retval EFI_UNSUPPORTED        The IOMMU does not support the memory range specified by Mapping.
   @retval EFI_OUT_OF_RESOURCES   There are not enough resources available to modify the IOMMU access.
   @retval EFI_DEVICE_ERROR       The IOMMU device reported an error while attempting the operation.
+  @retval EFI_NOT_AVAILABLE_YET  DMA protection has been enabled, but DMA buffer are
+                                 not available to be allocated yet.
 
 **/
 EFI_STATUS
@@ -115,6 +121,16 @@ PeiIoMmuSetAttribute (
   IN UINT64                IoMmuAccess
   )
 {
+  VOID                        *Hob;
+  DMA_BUFFER_INFO             *DmaBufferInfo;
+
+  Hob = GetFirstGuidHob (&mDmaBufferInfoGuid);
+  DmaBufferInfo = GET_GUID_HOB_DATA(Hob);
+
+  if (DmaBufferInfo->DmaBufferCurrentTop == 0) {
+    return EFI_NOT_AVAILABLE_YET;
+  }
+
   return EFI_SUCCESS;
 }
 
@@ -136,6 +152,8 @@ PeiIoMmuSetAttribute (
   @retval EFI_INVALID_PARAMETER One or more parameters are invalid.
   @retval EFI_OUT_OF_RESOURCES  The request could not be completed due to a lack of resources.
   @retval EFI_DEVICE_ERROR      The system hardware could not map the requested address.
+  @retval EFI_NOT_AVAILABLE_YET DMA protection has been enabled, but DMA buffer are
+                                not available to be allocated yet.
 
 **/
 EFI_STATUS
@@ -149,29 +167,38 @@ PeiIoMmuMap (
   OUT    VOID                                       **Mapping
   )
 {
-  MAP_INFO   *MapInfo;
-  UINTN      Length;
+  MAP_INFO                    *MapInfo;
+  UINTN                       Length;
+  VOID                        *Hob;
+  DMA_BUFFER_INFO             *DmaBufferInfo;
+
+  Hob = GetFirstGuidHob (&mDmaBufferInfoGuid);
+  DmaBufferInfo = GET_GUID_HOB_DATA(Hob);
+
+  DEBUG ((DEBUG_VERBOSE, "PeiIoMmuMap - HostAddress - 0x%x, NumberOfBytes - %x\n", HostAddress, *NumberOfBytes));
+  DEBUG ((DEBUG_VERBOSE, "  DmaBufferCurrentTop - %x\n", DmaBufferInfo->DmaBufferCurrentTop));
+  DEBUG ((DEBUG_VERBOSE, "  DmaBufferCurrentBottom - %x\n", DmaBufferInfo->DmaBufferCurrentBottom));
+
+  if (DmaBufferInfo->DmaBufferCurrentTop == 0) {
+    return EFI_NOT_AVAILABLE_YET;
+  }
 
   if (Operation == EdkiiIoMmuOperationBusMasterCommonBuffer ||
       Operation == EdkiiIoMmuOperationBusMasterCommonBuffer64) {
     *DeviceAddress = (UINTN)HostAddress;
-    *Mapping = 0;
+    *Mapping = NULL;
     return EFI_SUCCESS;
   }
 
-  DEBUG ((DEBUG_VERBOSE, "PeiIoMmuMap - HostAddress - 0x%x, NumberOfBytes - %x\n", HostAddress, *NumberOfBytes));
-  DEBUG ((DEBUG_VERBOSE, "  mDmaBufferCurrentTop - %x\n", mDmaBufferCurrentTop));
-  DEBUG ((DEBUG_VERBOSE, "  mDmaBufferCurrentBottom - %x\n", mDmaBufferCurrentBottom));
-
   Length = *NumberOfBytes + sizeof(MAP_INFO);
-  if (Length > mDmaBufferCurrentTop - mDmaBufferCurrentBottom) {
+  if (Length > DmaBufferInfo->DmaBufferCurrentTop - DmaBufferInfo->DmaBufferCurrentBottom) {
     DEBUG ((DEBUG_ERROR, "PeiIoMmuMap - OUT_OF_RESOURCE\n"));
     ASSERT (FALSE);
     return EFI_OUT_OF_RESOURCES;
   }
 
-  *DeviceAddress = mDmaBufferCurrentBottom;
-  mDmaBufferCurrentBottom += Length;
+  *DeviceAddress = DmaBufferInfo->DmaBufferCurrentBottom;
+  DmaBufferInfo->DmaBufferCurrentBottom += Length;
 
   MapInfo = (VOID *)(UINTN)(*DeviceAddress + *NumberOfBytes);
   MapInfo->Signature     = MAP_INFO_SIGNATURE;
@@ -208,6 +235,9 @@ PeiIoMmuMap (
   @retval EFI_SUCCESS           The range was unmapped.
   @retval EFI_INVALID_PARAMETER Mapping is not a value that was returned by Map().
   @retval EFI_DEVICE_ERROR      The data was not committed to the target system memory.
+  @retval EFI_NOT_AVAILABLE_YET DMA protection has been enabled, but DMA buffer are
+                                not available to be allocated yet.
+
 **/
 EFI_STATUS
 EFIAPI
@@ -216,16 +246,25 @@ PeiIoMmuUnmap (
   IN  VOID                                     *Mapping
   )
 {
-  MAP_INFO   *MapInfo;
-  UINTN      Length;
+  MAP_INFO                    *MapInfo;
+  UINTN                       Length;
+  VOID                        *Hob;
+  DMA_BUFFER_INFO             *DmaBufferInfo;
+
+  Hob = GetFirstGuidHob (&mDmaBufferInfoGuid);
+  DmaBufferInfo = GET_GUID_HOB_DATA(Hob);
+
+  DEBUG ((DEBUG_VERBOSE, "PeiIoMmuUnmap - Mapping - %x\n", Mapping));
+  DEBUG ((DEBUG_VERBOSE, "  DmaBufferCurrentTop - %x\n", DmaBufferInfo->DmaBufferCurrentTop));
+  DEBUG ((DEBUG_VERBOSE, "  DmaBufferCurrentBottom - %x\n", DmaBufferInfo->DmaBufferCurrentBottom));
+
+  if (DmaBufferInfo->DmaBufferCurrentTop == 0) {
+    return EFI_NOT_AVAILABLE_YET;
+  }
 
   if (Mapping == NULL) {
     return EFI_SUCCESS;
   }
-
-  DEBUG ((DEBUG_VERBOSE, "PeiIoMmuUnmap - Mapping - %x\n", Mapping));
-  DEBUG ((DEBUG_VERBOSE, "  mDmaBufferCurrentTop - %x\n", mDmaBufferCurrentTop));
-  DEBUG ((DEBUG_VERBOSE, "  mDmaBufferCurrentBottom - %x\n", mDmaBufferCurrentBottom));
 
   MapInfo = Mapping;
   ASSERT (MapInfo->Signature == MAP_INFO_SIGNATURE);
@@ -246,8 +285,8 @@ PeiIoMmuUnmap (
   }
 
   Length = MapInfo->NumberOfBytes + sizeof(MAP_INFO);
-  if (mDmaBufferCurrentBottom == MapInfo->DeviceAddress + Length) {
-    mDmaBufferCurrentBottom -= Length;
+  if (DmaBufferInfo->DmaBufferCurrentBottom == MapInfo->DeviceAddress + Length) {
+    DmaBufferInfo->DmaBufferCurrentBottom -= Length;
   }
 
   return EFI_SUCCESS;
@@ -267,9 +306,11 @@ PeiIoMmuUnmap (
 
   @retval EFI_SUCCESS           The requested memory pages were allocated.
   @retval EFI_UNSUPPORTED       Attributes is unsupported. The only legal attribute bits are
-                                MEMORY_WRITE_COMBINE and MEMORY_CACHED.
+                                MEMORY_WRITE_COMBINE, MEMORY_CACHED and DUAL_ADDRESS_CYCLE.
   @retval EFI_INVALID_PARAMETER One or more parameters are invalid.
   @retval EFI_OUT_OF_RESOURCES  The memory pages could not be allocated.
+  @retval EFI_NOT_AVAILABLE_YET DMA protection has been enabled, but DMA buffer are
+                                not available to be allocated yet.
 
 **/
 EFI_STATUS
@@ -282,20 +323,29 @@ PeiIoMmuAllocateBuffer (
   IN     UINT64                                   Attributes
   )
 {
-  UINTN  Length;
+  UINTN                       Length;
+  VOID                        *Hob;
+  DMA_BUFFER_INFO             *DmaBufferInfo;
+
+  Hob = GetFirstGuidHob (&mDmaBufferInfoGuid);
+  DmaBufferInfo = GET_GUID_HOB_DATA(Hob);
 
   DEBUG ((DEBUG_VERBOSE, "PeiIoMmuAllocateBuffer - page - %x\n", Pages));
-  DEBUG ((DEBUG_VERBOSE, "  mDmaBufferCurrentTop - %x\n", mDmaBufferCurrentTop));
-  DEBUG ((DEBUG_VERBOSE, "  mDmaBufferCurrentBottom - %x\n", mDmaBufferCurrentBottom));
+  DEBUG ((DEBUG_VERBOSE, "  DmaBufferCurrentTop - %x\n", DmaBufferInfo->DmaBufferCurrentTop));
+  DEBUG ((DEBUG_VERBOSE, "  DmaBufferCurrentBottom - %x\n", DmaBufferInfo->DmaBufferCurrentBottom));
+
+  if (DmaBufferInfo->DmaBufferCurrentTop == 0) {
+    return EFI_NOT_AVAILABLE_YET;
+  }
 
   Length = EFI_PAGES_TO_SIZE(Pages);
-  if (Length > mDmaBufferCurrentTop - mDmaBufferCurrentBottom) {
+  if (Length > DmaBufferInfo->DmaBufferCurrentTop - DmaBufferInfo->DmaBufferCurrentBottom) {
     DEBUG ((DEBUG_ERROR, "PeiIoMmuAllocateBuffer - OUT_OF_RESOURCE\n"));
     ASSERT (FALSE);
     return EFI_OUT_OF_RESOURCES;
   }
-  *HostAddress = (VOID *)(UINTN)(mDmaBufferCurrentTop - Length);
-  mDmaBufferCurrentTop -= Length;
+  *HostAddress = (VOID *)(UINTN)(DmaBufferInfo->DmaBufferCurrentTop - Length);
+  DmaBufferInfo->DmaBufferCurrentTop -= Length;
 
   DEBUG ((DEBUG_VERBOSE, "PeiIoMmuAllocateBuffer - allocate - %x\n", *HostAddress));
   return EFI_SUCCESS;
@@ -311,6 +361,8 @@ PeiIoMmuAllocateBuffer (
   @retval EFI_SUCCESS           The requested memory pages were freed.
   @retval EFI_INVALID_PARAMETER The memory range specified by HostAddress and Pages
                                 was not allocated with AllocateBuffer().
+  @retval EFI_NOT_AVAILABLE_YET DMA protection has been enabled, but DMA buffer are
+                                not available to be allocated yet.
 
 **/
 EFI_STATUS
@@ -321,15 +373,24 @@ PeiIoMmuFreeBuffer (
   IN  VOID                                     *HostAddress
   )
 {
-  UINTN  Length;
+  UINTN                       Length;
+  VOID                        *Hob;
+  DMA_BUFFER_INFO             *DmaBufferInfo;
+
+  Hob = GetFirstGuidHob (&mDmaBufferInfoGuid);
+  DmaBufferInfo = GET_GUID_HOB_DATA(Hob);
 
   DEBUG ((DEBUG_VERBOSE, "PeiIoMmuFreeBuffer - page - %x, HostAddr - %x\n", Pages, HostAddress));
-  DEBUG ((DEBUG_VERBOSE, "  mDmaBufferCurrentTop - %x\n", mDmaBufferCurrentTop));
-  DEBUG ((DEBUG_VERBOSE, "  mDmaBufferCurrentBottom - %x\n", mDmaBufferCurrentBottom));
+  DEBUG ((DEBUG_VERBOSE, "  DmaBufferCurrentTop - %x\n", DmaBufferInfo->DmaBufferCurrentTop));
+  DEBUG ((DEBUG_VERBOSE, "  DmaBufferCurrentBottom - %x\n", DmaBufferInfo->DmaBufferCurrentBottom));
+
+  if (DmaBufferInfo->DmaBufferCurrentTop == 0) {
+    return EFI_NOT_AVAILABLE_YET;
+  }
 
   Length = EFI_PAGES_TO_SIZE(Pages);
-  if ((UINTN)HostAddress == mDmaBufferCurrentTop) {
-    mDmaBufferCurrentTop += Length;
+  if ((UINTN)HostAddress == DmaBufferInfo->DmaBufferCurrentTop) {
+    DmaBufferInfo->DmaBufferCurrentTop += Length;
   }
 
   return EFI_SUCCESS;
@@ -350,177 +411,20 @@ CONST EFI_PEI_PPI_DESCRIPTOR mIoMmuPpiList = {
   (VOID *) &mIoMmuPpi
 };
 
-#define MEMORY_ATTRIBUTE_MASK (EFI_RESOURCE_ATTRIBUTE_PRESENT | \
-                               EFI_RESOURCE_ATTRIBUTE_INITIALIZED | \
-                               EFI_RESOURCE_ATTRIBUTE_TESTED | \
-                               EFI_RESOURCE_ATTRIBUTE_16_BIT_IO | \
-                               EFI_RESOURCE_ATTRIBUTE_32_BIT_IO | \
-                               EFI_RESOURCE_ATTRIBUTE_64_BIT_IO \
-                               )
-
-#define TESTED_MEMORY_ATTRIBUTES      (EFI_RESOURCE_ATTRIBUTE_PRESENT | EFI_RESOURCE_ATTRIBUTE_INITIALIZED | EFI_RESOURCE_ATTRIBUTE_TESTED)
-
-#define INITIALIZED_MEMORY_ATTRIBUTES (EFI_RESOURCE_ATTRIBUTE_PRESENT | EFI_RESOURCE_ATTRIBUTE_INITIALIZED)
-
-#define PRESENT_MEMORY_ATTRIBUTES     (EFI_RESOURCE_ATTRIBUTE_PRESENT)
-
-GLOBAL_REMOVE_IF_UNREFERENCED CHAR8 *mResourceTypeShortName[] = {
-  "Mem",
-  "MMIO",
-  "I/O",
-  "FD",
-  "MM Port I/O",
-  "Reserved Mem",
-  "Reserved I/O",
-};
-
-/**
-  Return the short name of resource type.
-
-  @param Type  resource type.
-
-  @return the short name of resource type.
-**/
-CHAR8 *
-ShortNameOfResourceType (
-  IN UINT32 Type
-  )
-{
-  if (Type < sizeof(mResourceTypeShortName) / sizeof(mResourceTypeShortName[0])) {
-    return mResourceTypeShortName[Type];
-  } else {
-    return "Unknown";
-  }
-}
-
-/**
-  Dump resource hob.
-
-  @param HobList  the HOB list.
-**/
-VOID
-DumpResourceHob (
-  IN VOID                        *HobList
-  )
-{
-  EFI_PEI_HOB_POINTERS        Hob;
-  EFI_HOB_RESOURCE_DESCRIPTOR *ResourceHob;
-
-  DEBUG ((DEBUG_VERBOSE, "Resource Descriptor HOBs\n"));
-  for (Hob.Raw = HobList; !END_OF_HOB_LIST (Hob); Hob.Raw = GET_NEXT_HOB (Hob)) {
-    if (GET_HOB_TYPE (Hob) == EFI_HOB_TYPE_RESOURCE_DESCRIPTOR) {
-      ResourceHob = Hob.ResourceDescriptor;
-      DEBUG ((DEBUG_VERBOSE,
-        "  BA=%016lx  L=%016lx  Attr=%08x  ",
-        ResourceHob->PhysicalStart,
-        ResourceHob->ResourceLength,
-        ResourceHob->ResourceAttribute
-        ));
-      DEBUG ((DEBUG_VERBOSE, ShortNameOfResourceType(ResourceHob->ResourceType)));
-      switch (ResourceHob->ResourceType) {
-      case EFI_RESOURCE_SYSTEM_MEMORY:
-        if ((ResourceHob->ResourceAttribute & EFI_RESOURCE_ATTRIBUTE_PERSISTENT) != 0) {
-          DEBUG ((DEBUG_VERBOSE, " (Persistent)"));
-        } else if ((ResourceHob->ResourceAttribute & EFI_RESOURCE_ATTRIBUTE_MORE_RELIABLE) != 0) {
-          DEBUG ((DEBUG_VERBOSE, " (MoreReliable)"));
-        } else if ((ResourceHob->ResourceAttribute & MEMORY_ATTRIBUTE_MASK) == TESTED_MEMORY_ATTRIBUTES) {
-          DEBUG ((DEBUG_VERBOSE, " (Tested)"));
-        } else if ((ResourceHob->ResourceAttribute & MEMORY_ATTRIBUTE_MASK) == INITIALIZED_MEMORY_ATTRIBUTES) {
-          DEBUG ((DEBUG_VERBOSE, " (Init)"));
-        } else if ((ResourceHob->ResourceAttribute & MEMORY_ATTRIBUTE_MASK) == PRESENT_MEMORY_ATTRIBUTES) {
-          DEBUG ((DEBUG_VERBOSE, " (Present)"));
-        } else {
-          DEBUG ((DEBUG_VERBOSE, " (Unknown)"));
-        }
-        break;
-      default:
-        break;
-      }
-      DEBUG ((DEBUG_VERBOSE, "\n"));
-    }
-  }
-}
-
-/**
-  Dump PHIT hob.
-
-  @param HobList  the HOB list.
-**/
-VOID
-DumpPhitHob (
-  IN VOID                        *HobList
-  )
-{
-  EFI_HOB_HANDOFF_INFO_TABLE  *PhitHob;
-
-  PhitHob = HobList;
-  ASSERT(GET_HOB_TYPE(HobList) == EFI_HOB_TYPE_HANDOFF);
-  DEBUG ((DEBUG_VERBOSE, "PHIT HOB\n"));
-  DEBUG ((DEBUG_VERBOSE, "  PhitHob             - 0x%x\n", PhitHob));
-  DEBUG ((DEBUG_VERBOSE, "  BootMode            - 0x%x\n", PhitHob->BootMode));
-  DEBUG ((DEBUG_VERBOSE, "  EfiMemoryTop        - 0x%016lx\n", PhitHob->EfiMemoryTop));
-  DEBUG ((DEBUG_VERBOSE, "  EfiMemoryBottom     - 0x%016lx\n", PhitHob->EfiMemoryBottom));
-  DEBUG ((DEBUG_VERBOSE, "  EfiFreeMemoryTop    - 0x%016lx\n", PhitHob->EfiFreeMemoryTop));
-  DEBUG ((DEBUG_VERBOSE, "  EfiFreeMemoryBottom - 0x%016lx\n", PhitHob->EfiFreeMemoryBottom));
-  DEBUG ((DEBUG_VERBOSE, "  EfiEndOfHobList     - 0x%lx\n", PhitHob->EfiEndOfHobList));
-}
-
-/**
-  Get the highest memory.
-
-  @return the highest memory.
-**/
-UINT64
-GetTopMemory (
-  VOID
-  )
-{
-  VOID                        *HobList;
-  EFI_PEI_HOB_POINTERS        Hob;
-  EFI_HOB_RESOURCE_DESCRIPTOR *ResourceHob;
-  UINT64                      TopMemory;
-  UINT64                      ResourceTop;
-
-  HobList = GetHobList ();
-
-  TopMemory = 0;
-  for (Hob.Raw = HobList; !END_OF_HOB_LIST (Hob); Hob.Raw = GET_NEXT_HOB (Hob)) {
-    if (GET_HOB_TYPE (Hob) == EFI_HOB_TYPE_RESOURCE_DESCRIPTOR) {
-      ResourceHob = Hob.ResourceDescriptor;
-      switch (ResourceHob->ResourceType) {
-      case EFI_RESOURCE_SYSTEM_MEMORY:
-        ResourceTop = ResourceHob->PhysicalStart + ResourceHob->ResourceLength;
-        if (TopMemory < ResourceTop) {
-          TopMemory = ResourceTop;
-        }
-        break;
-      default:
-        break;
-      }
-      DEBUG ((DEBUG_VERBOSE, "\n"));
-    }
-  }
-  return TopMemory;
-}
-
 /**
   Initialize DMA protection.
 
-  @param DmaBufferSize  the DMA buffer size
-  @param DmaBufferBase  the DMA buffer base
+  @param VTdInfo        The VTd engine context information.
 
   @retval EFI_SUCCESS           the DMA protection is initialized.
   @retval EFI_OUT_OF_RESOURCES  no enough resource to initialize DMA protection.
 **/
 EFI_STATUS
 InitDmaProtection (
-  IN   UINTN  DmaBufferSize,
-  OUT  UINTN  *DmaBufferBase
+  IN   VTD_INFO                    *VTdInfo
   )
 {
   EFI_STATUS                  Status;
-  VOID                        *HobList;
-  EFI_HOB_HANDOFF_INFO_TABLE  *PhitHob;
   UINT32                      LowMemoryAlignment;
   UINT64                      HighMemoryAlignment;
   UINTN                       MemoryAlignment;
@@ -528,583 +432,193 @@ InitDmaProtection (
   UINTN                       LowTop;
   UINTN                       HighBottom;
   UINT64                      HighTop;
+  DMA_BUFFER_INFO             *DmaBufferInfo;
+  VOID                        *Hob;
+  EFI_PEI_PPI_DESCRIPTOR      *OldDescriptor;
+  EDKII_IOMMU_PPI             *OldIoMmuPpi;
 
-  HobList = GetHobList ();
-  DumpPhitHob (HobList);
-  DumpResourceHob (HobList);
+  Hob = GetFirstGuidHob (&mDmaBufferInfoGuid);
+  DmaBufferInfo = GET_GUID_HOB_DATA(Hob);
 
-  PhitHob = HobList;
+  DEBUG ((DEBUG_INFO, " DmaBufferSize : 0x%x\n", DmaBufferInfo->DmaBufferSize));
 
-  ASSERT (PhitHob->EfiMemoryBottom < PhitHob->EfiMemoryTop);
-
-  LowMemoryAlignment = GetLowMemoryAlignment (mEngineMask);
-  HighMemoryAlignment = GetHighMemoryAlignment (mEngineMask);
+  LowMemoryAlignment = GetLowMemoryAlignment (VTdInfo, VTdInfo->EngineMask);
+  HighMemoryAlignment = GetHighMemoryAlignment (VTdInfo, VTdInfo->EngineMask);
   if (LowMemoryAlignment < HighMemoryAlignment) {
     MemoryAlignment = (UINTN)HighMemoryAlignment;
   } else {
     MemoryAlignment = LowMemoryAlignment;
   }
-  ASSERT (DmaBufferSize == ALIGN_VALUE(DmaBufferSize, MemoryAlignment));
-  *DmaBufferBase = (UINTN)AllocateAlignedPages (EFI_SIZE_TO_PAGES(DmaBufferSize), MemoryAlignment);
-  ASSERT (*DmaBufferBase != 0);
-  if (*DmaBufferBase == 0) {
+  ASSERT (DmaBufferInfo->DmaBufferSize == ALIGN_VALUE(DmaBufferInfo->DmaBufferSize, MemoryAlignment));
+  DmaBufferInfo->DmaBufferBase = (UINTN)AllocateAlignedPages (EFI_SIZE_TO_PAGES(DmaBufferInfo->DmaBufferSize), MemoryAlignment);
+  ASSERT (DmaBufferInfo->DmaBufferBase != 0);
+  if (DmaBufferInfo->DmaBufferBase == 0) {
     DEBUG ((DEBUG_INFO, " InitDmaProtection : OutOfResource\n"));
     return EFI_OUT_OF_RESOURCES;
   }
 
+  DEBUG ((DEBUG_INFO, " DmaBufferBase : 0x%x\n", DmaBufferInfo->DmaBufferBase));
+
+  DmaBufferInfo->DmaBufferCurrentTop = DmaBufferInfo->DmaBufferBase + DmaBufferInfo->DmaBufferSize;
+  DmaBufferInfo->DmaBufferCurrentBottom = DmaBufferInfo->DmaBufferBase;
+
+  //
+  // (Re)Install PPI.
+  //
+  Status = PeiServicesLocatePpi (
+             &gEdkiiIoMmuPpiGuid,
+             0,
+             &OldDescriptor,
+             (VOID **) &OldIoMmuPpi
+             );
+  if (!EFI_ERROR (Status)) {
+    Status = PeiServicesReInstallPpi (OldDescriptor, &mIoMmuPpiList);
+  } else {
+    Status = PeiServicesInstallPpi (&mIoMmuPpiList);
+  }
+  ASSERT_EFI_ERROR (Status);
+
   LowBottom = 0;
-  LowTop = *DmaBufferBase;
-  HighBottom = *DmaBufferBase + DmaBufferSize;
-  HighTop = GetTopMemory ();
+  LowTop = DmaBufferInfo->DmaBufferBase;
+  HighBottom = DmaBufferInfo->DmaBufferBase + DmaBufferInfo->DmaBufferSize;
+  HighTop = LShiftU64 (1, VTdInfo->HostAddressWidth + 1);
 
   Status = SetDmaProtectedRange (
-               mEngineMask,
-               (UINT32)LowBottom,
-               (UINT32)(LowTop - LowBottom),
-               HighBottom,
-               HighTop - HighBottom
-               );
+             VTdInfo,
+             VTdInfo->EngineMask,
+             (UINT32)LowBottom,
+             (UINT32)(LowTop - LowBottom),
+             HighBottom,
+             HighTop - HighBottom
+             );
 
   if (EFI_ERROR(Status)) {
-    FreePages ((VOID *)*DmaBufferBase, EFI_SIZE_TO_PAGES(DmaBufferSize));
+    FreePages ((VOID *)DmaBufferInfo->DmaBufferBase, EFI_SIZE_TO_PAGES(DmaBufferInfo->DmaBufferSize));
   }
 
   return Status;
 }
 
 /**
-  Dump DMAR DeviceScopeEntry.
+  Initializes the Intel VTd Info.
 
-  @param[in]  DmarDeviceScopeEntry  DMAR DeviceScopeEntry
-**/
-VOID
-DumpDmarDeviceScopeEntry (
-  IN EFI_ACPI_DMAR_DEVICE_SCOPE_STRUCTURE_HEADER     *DmarDeviceScopeEntry
-  )
-{
-  UINTN   PciPathNumber;
-  UINTN   PciPathIndex;
-  EFI_ACPI_DMAR_PCI_PATH  *PciPath;
+  @retval EFI_SUCCESS            Usb bot driver is successfully initialized.
+  @retval EFI_OUT_OF_RESOURCES   Can't initialize the driver.
 
-  if (DmarDeviceScopeEntry == NULL) {
-    return;
-  }
-
-  DEBUG ((DEBUG_INFO,
-    "    *************************************************************************\n"
-    ));
-  DEBUG ((DEBUG_INFO,
-    "    *       DMA-Remapping Device Scope Entry Structure                      *\n"
-    ));
-  DEBUG ((DEBUG_INFO,
-    "    *************************************************************************\n"
-    ));
-  DEBUG ((DEBUG_INFO,
-    (sizeof(UINTN) == sizeof(UINT64)) ?
-    "    DMAR Device Scope Entry address ...................... 0x%016lx\n" :
-    "    DMAR Device Scope Entry address ...................... 0x%08x\n",
-    DmarDeviceScopeEntry
-    ));
-  DEBUG ((DEBUG_INFO,
-    "      Device Scope Entry Type ............................ 0x%02x\n",
-    DmarDeviceScopeEntry->Type
-    ));
-  switch (DmarDeviceScopeEntry->Type) {
-  case EFI_ACPI_DEVICE_SCOPE_ENTRY_TYPE_PCI_ENDPOINT:
-    DEBUG ((DEBUG_INFO,
-      "        PCI Endpoint Device\n"
-      ));
-    break;
-  case EFI_ACPI_DEVICE_SCOPE_ENTRY_TYPE_PCI_BRIDGE:
-    DEBUG ((DEBUG_INFO,
-      "        PCI Sub-hierachy\n"
-      ));
-    break;
-  default:
-    break;
-  }
-  DEBUG ((DEBUG_INFO,
-    "      Length ............................................. 0x%02x\n",
-    DmarDeviceScopeEntry->Length
-    ));
-  DEBUG ((DEBUG_INFO,
-    "      Enumeration ID ..................................... 0x%02x\n",
-    DmarDeviceScopeEntry->EnumerationId
-    ));
-  DEBUG ((DEBUG_INFO,
-    "      Starting Bus Number ................................ 0x%02x\n",
-    DmarDeviceScopeEntry->StartBusNumber
-    ));
-
-  PciPathNumber = (DmarDeviceScopeEntry->Length - sizeof(EFI_ACPI_DMAR_DEVICE_SCOPE_STRUCTURE_HEADER)) / sizeof(EFI_ACPI_DMAR_PCI_PATH);
-  PciPath = (EFI_ACPI_DMAR_PCI_PATH *)(DmarDeviceScopeEntry + 1);
-  for (PciPathIndex = 0; PciPathIndex < PciPathNumber; PciPathIndex++) {
-    DEBUG ((DEBUG_INFO,
-      "      Device ............................................. 0x%02x\n",
-      PciPath[PciPathIndex].Device
-      ));
-    DEBUG ((DEBUG_INFO,
-      "      Function ........................................... 0x%02x\n",
-      PciPath[PciPathIndex].Function
-      ));
-  }
-
-  DEBUG ((DEBUG_INFO,
-    "    *************************************************************************\n\n"
-    ));
-
-  return;
-}
-
-/**
-  Dump DMAR RMRR table.
-
-  @param[in]  Rmrr  DMAR RMRR table
-**/
-VOID
-DumpDmarRmrr (
-  IN EFI_ACPI_DMAR_RMRR_HEADER *Rmrr
-  )
-{
-  EFI_ACPI_DMAR_DEVICE_SCOPE_STRUCTURE_HEADER       *DmarDeviceScopeEntry;
-  INTN                                    RmrrLen;
-
-  if (Rmrr == NULL) {
-    return;
-  }
-
-  DEBUG ((DEBUG_INFO,
-    "  ***************************************************************************\n"
-    ));
-  DEBUG ((DEBUG_INFO,
-    "  *       Reserved Memory Region Reporting Structure                        *\n"
-    ));
-  DEBUG ((DEBUG_INFO,
-    "  ***************************************************************************\n"
-    ));
-  DEBUG ((DEBUG_INFO,
-    (sizeof(UINTN) == sizeof(UINT64)) ?
-    "  RMRR address ........................................... 0x%016lx\n" :
-    "  RMRR address ........................................... 0x%08x\n",
-    Rmrr
-    ));
-  DEBUG ((DEBUG_INFO,
-    "    Type ................................................. 0x%04x\n",
-    Rmrr->Header.Type
-    ));
-  DEBUG ((DEBUG_INFO,
-    "    Length ............................................... 0x%04x\n",
-    Rmrr->Header.Length
-    ));
-  DEBUG ((DEBUG_INFO,
-    "    Segment Number ....................................... 0x%04x\n",
-    Rmrr->SegmentNumber
-    ));
-  DEBUG ((DEBUG_INFO,
-    "    Reserved Memory Region Base Address .................. 0x%016lx\n",
-    Rmrr->ReservedMemoryRegionBaseAddress
-    ));
-  DEBUG ((DEBUG_INFO,
-    "    Reserved Memory Region Limit Address ................. 0x%016lx\n",
-    Rmrr->ReservedMemoryRegionLimitAddress
-    ));
-
-  RmrrLen  = Rmrr->Header.Length - sizeof(EFI_ACPI_DMAR_RMRR_HEADER);
-  DmarDeviceScopeEntry = (EFI_ACPI_DMAR_DEVICE_SCOPE_STRUCTURE_HEADER *)(Rmrr + 1);
-  while (RmrrLen > 0) {
-    DumpDmarDeviceScopeEntry (DmarDeviceScopeEntry);
-    RmrrLen -= DmarDeviceScopeEntry->Length;
-    DmarDeviceScopeEntry = (EFI_ACPI_DMAR_DEVICE_SCOPE_STRUCTURE_HEADER *)((UINTN)DmarDeviceScopeEntry + DmarDeviceScopeEntry->Length);
-  }
-
-  DEBUG ((DEBUG_INFO,
-    "  ***************************************************************************\n\n"
-    ));
-
-  return;
-}
-
-/**
-  Dump DMAR DRHD table.
-
-  @param[in]  Drhd  DMAR DRHD table
-**/
-VOID
-DumpDmarDrhd (
-  IN EFI_ACPI_DMAR_DRHD_HEADER *Drhd
-  )
-{
-  EFI_ACPI_DMAR_DEVICE_SCOPE_STRUCTURE_HEADER       *DmarDeviceScopeEntry;
-  INTN                                    DrhdLen;
-
-  if (Drhd == NULL) {
-    return;
-  }
-
-  DEBUG ((DEBUG_INFO,
-    "  ***************************************************************************\n"
-    ));
-  DEBUG ((DEBUG_INFO,
-    "  *       DMA-Remapping Hardware Definition Structure                       *\n"
-    ));
-  DEBUG ((DEBUG_INFO,
-    "  ***************************************************************************\n"
-    ));
-  DEBUG ((DEBUG_INFO,
-    (sizeof(UINTN) == sizeof(UINT64)) ?
-    "  DRHD address ........................................... 0x%016lx\n" :
-    "  DRHD address ........................................... 0x%08x\n",
-    Drhd
-    ));
-  DEBUG ((DEBUG_INFO,
-    "    Type ................................................. 0x%04x\n",
-    Drhd->Header.Type
-    ));
-  DEBUG ((DEBUG_INFO,
-    "    Length ............................................... 0x%04x\n",
-    Drhd->Header.Length
-    ));
-  DEBUG ((DEBUG_INFO,
-    "    Flags ................................................ 0x%02x\n",
-    Drhd->Flags
-    ));
-  DEBUG ((DEBUG_INFO,
-    "      INCLUDE_PCI_ALL .................................... 0x%02x\n",
-    Drhd->Flags & EFI_ACPI_DMAR_DRHD_FLAGS_INCLUDE_PCI_ALL
-    ));
-  DEBUG ((DEBUG_INFO,
-    "    Segment Number ....................................... 0x%04x\n",
-    Drhd->SegmentNumber
-    ));
-  DEBUG ((DEBUG_INFO,
-    "    Register Base Address ................................ 0x%016lx\n",
-    Drhd->RegisterBaseAddress
-    ));
-
-  DrhdLen  = Drhd->Header.Length - sizeof(EFI_ACPI_DMAR_DRHD_HEADER);
-  DmarDeviceScopeEntry = (EFI_ACPI_DMAR_DEVICE_SCOPE_STRUCTURE_HEADER *)(Drhd + 1);
-  while (DrhdLen > 0) {
-    DumpDmarDeviceScopeEntry (DmarDeviceScopeEntry);
-    DrhdLen -= DmarDeviceScopeEntry->Length;
-    DmarDeviceScopeEntry = (EFI_ACPI_DMAR_DEVICE_SCOPE_STRUCTURE_HEADER *)((UINTN)DmarDeviceScopeEntry + DmarDeviceScopeEntry->Length);
-  }
-
-  DEBUG ((DEBUG_INFO,
-    "  ***************************************************************************\n\n"
-    ));
-
-  return;
-}
-
-/**
-  Dump DMAR ACPI table.
-
-  @param[in]  Dmar  DMAR ACPI table
-**/
-VOID
-DumpAcpiDMAR (
-  IN EFI_ACPI_DMAR_HEADER  *Dmar
-  )
-{
-  EFI_ACPI_DMAR_STRUCTURE_HEADER *DmarHeader;
-  INTN                  DmarLen;
-
-  if (Dmar == NULL) {
-    return;
-  }
-
-  //
-  // Dump Dmar table
-  //
-  DEBUG ((DEBUG_INFO,
-    "*****************************************************************************\n"
-    ));
-  DEBUG ((DEBUG_INFO,
-    "*         DMAR Table                                                        *\n"
-    ));
-  DEBUG ((DEBUG_INFO,
-    "*****************************************************************************\n"
-    ));
-
-  DEBUG ((DEBUG_INFO,
-    (sizeof(UINTN) == sizeof(UINT64)) ?
-    "DMAR address ............................................. 0x%016lx\n" :
-    "DMAR address ............................................. 0x%08x\n",
-    Dmar
-    ));
-
-  DEBUG ((DEBUG_INFO,
-    "  Table Contents:\n"
-    ));
-  DEBUG ((DEBUG_INFO,
-    "    Host Address Width ................................... 0x%02x\n",
-    Dmar->HostAddressWidth
-    ));
-  DEBUG ((DEBUG_INFO,
-    "    Flags ................................................ 0x%02x\n",
-    Dmar->Flags
-    ));
-  DEBUG ((DEBUG_INFO,
-    "      INTR_REMAP ......................................... 0x%02x\n",
-    Dmar->Flags & EFI_ACPI_DMAR_FLAGS_INTR_REMAP
-    ));
-  DEBUG ((DEBUG_INFO,
-    "      X2APIC_OPT_OUT_SET ................................. 0x%02x\n",
-    Dmar->Flags & EFI_ACPI_DMAR_FLAGS_X2APIC_OPT_OUT
-    ));
-
-  DmarLen  = Dmar->Header.Length - sizeof(EFI_ACPI_DMAR_HEADER);
-  DmarHeader = (EFI_ACPI_DMAR_STRUCTURE_HEADER *)(Dmar + 1);
-  while (DmarLen > 0) {
-    switch (DmarHeader->Type) {
-    case EFI_ACPI_DMAR_TYPE_DRHD:
-      DumpDmarDrhd ((EFI_ACPI_DMAR_DRHD_HEADER *)DmarHeader);
-      break;
-    case EFI_ACPI_DMAR_TYPE_RMRR:
-      DumpDmarRmrr ((EFI_ACPI_DMAR_RMRR_HEADER *)DmarHeader);
-      break;
-    default:
-      break;
-    }
-    DmarLen -= DmarHeader->Length;
-    DmarHeader = (EFI_ACPI_DMAR_STRUCTURE_HEADER *)((UINTN)DmarHeader + DmarHeader->Length);
-  }
-
-  DEBUG ((DEBUG_INFO,
-    "*****************************************************************************\n\n"
-    ));
-
-  return;
-}
-
-/**
-  Get VTd engine number.
-
-  @return the VTd engine number.
-**/
-UINTN
-GetVtdEngineNumber (
-  VOID
-  )
-{
-  EFI_ACPI_DMAR_STRUCTURE_HEADER                    *DmarHeader;
-  UINTN                                             VtdIndex;
-
-  VtdIndex = 0;
-  DmarHeader = (EFI_ACPI_DMAR_STRUCTURE_HEADER *)((UINTN)(mAcpiDmarTable + 1));
-  while ((UINTN)DmarHeader < (UINTN)mAcpiDmarTable + mAcpiDmarTable->Header.Length) {
-    switch (DmarHeader->Type) {
-    case EFI_ACPI_DMAR_TYPE_DRHD:
-      VtdIndex++;
-      break;
-    default:
-      break;
-    }
-    DmarHeader = (EFI_ACPI_DMAR_STRUCTURE_HEADER *)((UINTN)DmarHeader + DmarHeader->Length);
-  }
-  return VtdIndex ;
-}
-
-/**
-  Process DMAR DHRD table.
-
-  @param[in]  VtdIndex  The index of VTd engine.
-  @param[in]  DmarDrhd  The DRHD table.
-**/
-VOID
-ProcessDhrd (
-  IN UINTN                      VtdIndex,
-  IN EFI_ACPI_DMAR_DRHD_HEADER  *DmarDrhd
-  )
-{
-  DEBUG ((DEBUG_INFO,"  VTD (%d) BaseAddress -  0x%016lx\n", VtdIndex, DmarDrhd->RegisterBaseAddress));
-  mVTdInfo->VTdEngineAddress[VtdIndex] = DmarDrhd->RegisterBaseAddress;
-}
-
-/**
-  Parse DMAR DRHD table.
-
-  @return EFI_SUCCESS  The DMAR DRHD table is parsed.
 **/
 EFI_STATUS
-ParseDmarAcpiTableDrhd (
+InitVTdInfo (
   VOID
   )
 {
-  EFI_ACPI_DMAR_STRUCTURE_HEADER                    *DmarHeader;
-  UINTN                                             VtdUnitNumber;
-  UINTN                                             VtdIndex;
+  EFI_STATUS                  Status;
+  EFI_ACPI_DMAR_HEADER        *AcpiDmarTable;
+  VOID                        *Hob;
 
-  VtdUnitNumber = GetVtdEngineNumber ();
-  if (VtdUnitNumber == 0) {
-    return EFI_UNSUPPORTED;
-  }
+  Status = PeiServicesLocatePpi (
+             &gEdkiiVTdInfoPpiGuid,
+             0,
+             NULL,
+             (VOID **)&AcpiDmarTable
+             );
+  ASSERT_EFI_ERROR(Status);
 
-  mVTdInfo = AllocateZeroPool (sizeof(VTD_INFO) + (VtdUnitNumber - 1) * sizeof(UINT64));
-  if (mVTdInfo == NULL) {
-    return EFI_OUT_OF_RESOURCES;
-  }
-  mVTdInfo->HostAddressWidth = mAcpiDmarTable->HostAddressWidth;
-  mVTdInfo->VTdEngineCount   = VtdUnitNumber;
-
-  VtdIndex = 0;
-  DmarHeader = (EFI_ACPI_DMAR_STRUCTURE_HEADER *)((UINTN)(mAcpiDmarTable + 1));
-  while ((UINTN)DmarHeader < (UINTN)mAcpiDmarTable + mAcpiDmarTable->Header.Length) {
-    switch (DmarHeader->Type) {
-    case EFI_ACPI_DMAR_TYPE_DRHD:
-      ASSERT (VtdIndex < VtdUnitNumber);
-      ProcessDhrd (VtdIndex, (EFI_ACPI_DMAR_DRHD_HEADER *)DmarHeader);
-      VtdIndex++;
-
-      break;
-
-    default:
-      break;
-    }
-    DmarHeader = (EFI_ACPI_DMAR_STRUCTURE_HEADER *)((UINTN)DmarHeader + DmarHeader->Length);
-  }
-  ASSERT (VtdIndex == VtdUnitNumber);
+  DumpAcpiDMAR (AcpiDmarTable);
 
   //
-  // Initialize the engine mask to all.
+  // Clear old VTdInfo Hob.
   //
-  mEngineMask = LShiftU64 (1, VtdUnitNumber) - 1;
+  Hob = GetFirstGuidHob (&mVTdInfoGuid);
+  if (Hob != NULL) {
+    ZeroMem (&((EFI_HOB_GUID_TYPE *)Hob)->Name, sizeof(EFI_GUID));
+  }
+
+  //
+  // Get DMAR information to local VTdInfo
+  //
+  Status = ParseDmarAcpiTableDrhd (AcpiDmarTable);
+  if (EFI_ERROR(Status)) {
+    return Status;
+  }
+
+  //
+  // NOTE: Do not parse RMRR here, because RMRR may cause PMR programming.
+  //
 
   return EFI_SUCCESS;
 }
 
 /**
-  Return the VTd engine index according to the Segment and DevScopeEntry.
+  Initializes the Intel VTd PMR for all memory.
 
-  @param Segment         The segment of the VTd engine
-  @param DevScopeEntry   The DevScopeEntry of the VTd engine
+  @retval EFI_SUCCESS            Usb bot driver is successfully initialized.
+  @retval EFI_OUT_OF_RESOURCES   Can't initialize the driver.
 
-  @return The VTd engine index according to the Segment and DevScopeEntry.
-  @retval -1  The VTd engine is not found.
 **/
-UINTN
-GetVTdEngineFromDevScopeEntry (
-  IN  UINT16                                      Segment,
-  IN  EFI_ACPI_DMAR_DEVICE_SCOPE_STRUCTURE_HEADER *DevScopeEntry
-  )
-{
-  EFI_ACPI_DMAR_STRUCTURE_HEADER                    *DmarHeader;
-  UINTN                                             VtdIndex;
-  EFI_ACPI_DMAR_DRHD_HEADER                         *DmarDrhd;
-  EFI_ACPI_DMAR_DEVICE_SCOPE_STRUCTURE_HEADER       *ThisDevScopeEntry;
-
-  VtdIndex = 0;
-  DmarHeader = (EFI_ACPI_DMAR_STRUCTURE_HEADER *)((UINTN)(mAcpiDmarTable + 1));
-  while ((UINTN)DmarHeader < (UINTN)mAcpiDmarTable + mAcpiDmarTable->Header.Length) {
-    switch (DmarHeader->Type) {
-    case EFI_ACPI_DMAR_TYPE_DRHD:
-      DmarDrhd = (EFI_ACPI_DMAR_DRHD_HEADER *)DmarHeader;
-      if (DmarDrhd->SegmentNumber != Segment) {
-        // Mismatch
-        break;
-      }
-      if ((DmarDrhd->Header.Length == sizeof(EFI_ACPI_DMAR_DRHD_HEADER)) ||
-          ((DmarDrhd->Flags & EFI_ACPI_DMAR_DRHD_FLAGS_INCLUDE_PCI_ALL) != 0)) {
-        // No DevScopeEntry
-        // Do not handle PCI_ALL
-        break;
-      }
-      ThisDevScopeEntry = (EFI_ACPI_DMAR_DEVICE_SCOPE_STRUCTURE_HEADER *)((UINTN)(DmarDrhd + 1));
-      while ((UINTN)ThisDevScopeEntry < (UINTN)DmarDrhd + DmarDrhd->Header.Length) {
-        if ((ThisDevScopeEntry->Length == DevScopeEntry->Length) &&
-            (CompareMem (ThisDevScopeEntry, DevScopeEntry, DevScopeEntry->Length) == 0)) {
-          return VtdIndex;
-        }
-        ThisDevScopeEntry = (EFI_ACPI_DMAR_DEVICE_SCOPE_STRUCTURE_HEADER *)((UINTN)ThisDevScopeEntry + ThisDevScopeEntry->Length);
-      }
-      break;
-    default:
-      break;
-    }
-    DmarHeader = (EFI_ACPI_DMAR_STRUCTURE_HEADER *)((UINTN)DmarHeader + DmarHeader->Length);
-  }
-  return (UINTN)-1;
-}
-
-/**
-  Process DMAR RMRR table.
-
-  @param[in]  DmarRmrr  The RMRR table.
-**/
-VOID
-ProcessRmrr (
-  IN EFI_ACPI_DMAR_RMRR_HEADER  *DmarRmrr
-  )
-{
-  EFI_ACPI_DMAR_DEVICE_SCOPE_STRUCTURE_HEADER       *DmarDevScopeEntry;
-  UINTN                                             VTdIndex;
-  UINT64                                            RmrrMask;
-  UINTN                                             LowBottom;
-  UINTN                                             LowTop;
-  UINTN                                             HighBottom;
-  UINT64                                            HighTop;
-
-  DEBUG ((DEBUG_INFO,"  RMRR (Base 0x%016lx, Limit 0x%016lx)\n", DmarRmrr->ReservedMemoryRegionBaseAddress, DmarRmrr->ReservedMemoryRegionLimitAddress));
-
-  if ((DmarRmrr->ReservedMemoryRegionBaseAddress == 0) ||
-      (DmarRmrr->ReservedMemoryRegionLimitAddress == 0)) {
-    return ;
-  }
-
-  DmarDevScopeEntry = (EFI_ACPI_DMAR_DEVICE_SCOPE_STRUCTURE_HEADER *)((UINTN)(DmarRmrr + 1));
-  while ((UINTN)DmarDevScopeEntry < (UINTN)DmarRmrr + DmarRmrr->Header.Length) {
-    ASSERT (DmarDevScopeEntry->Type == EFI_ACPI_DEVICE_SCOPE_ENTRY_TYPE_PCI_ENDPOINT);
-
-    VTdIndex = GetVTdEngineFromDevScopeEntry (DmarRmrr->SegmentNumber, DmarDevScopeEntry);
-    if (VTdIndex != (UINTN)-1) {
-      RmrrMask = LShiftU64 (1, VTdIndex);
-
-      LowBottom = 0;
-      LowTop = (UINTN)DmarRmrr->ReservedMemoryRegionBaseAddress;
-      HighBottom = (UINTN)DmarRmrr->ReservedMemoryRegionLimitAddress + 1;
-      HighTop = GetTopMemory ();
-
-      SetDmaProtectedRange (
-        RmrrMask,
-        0,
-        (UINT32)(LowTop - LowBottom),
-        HighBottom,
-        HighTop - HighBottom
-        );
-
-      //
-      // Remove the engine from the engine mask.
-      // The assumption is that any other PEI driver does not access
-      // the device covered by this engine.
-      //
-      mEngineMask = mEngineMask & (~RmrrMask);
-    }
-
-    DmarDevScopeEntry = (EFI_ACPI_DMAR_DEVICE_SCOPE_STRUCTURE_HEADER *)((UINTN)DmarDevScopeEntry + DmarDevScopeEntry->Length);
-  }
-}
-
-/**
-  Parse DMAR DRHD table.
-**/
-VOID
-ParseDmarAcpiTableRmrr (
+EFI_STATUS
+InitVTdPmrForAll (
   VOID
   )
 {
-  EFI_ACPI_DMAR_STRUCTURE_HEADER                    *DmarHeader;
+  EFI_STATUS                  Status;
+  VOID                        *Hob;
+  VTD_INFO                    *VTdInfo;
+  UINTN                       LowBottom;
+  UINTN                       LowTop;
+  UINTN                       HighBottom;
+  UINT64                      HighTop;
 
-  DmarHeader = (EFI_ACPI_DMAR_STRUCTURE_HEADER *)((UINTN)(mAcpiDmarTable + 1));
-  while ((UINTN)DmarHeader < (UINTN)mAcpiDmarTable + mAcpiDmarTable->Header.Length) {
-    switch (DmarHeader->Type) {
-    case EFI_ACPI_DMAR_TYPE_RMRR:
-      ProcessRmrr ((EFI_ACPI_DMAR_RMRR_HEADER *)DmarHeader);
-      break;
-    default:
-      break;
-    }
-    DmarHeader = (EFI_ACPI_DMAR_STRUCTURE_HEADER *)((UINTN)DmarHeader + DmarHeader->Length);
-  }
+  Hob = GetFirstGuidHob (&mVTdInfoGuid);
+  VTdInfo = GET_GUID_HOB_DATA(Hob);
+
+  LowBottom = 0;
+  LowTop = 0;
+  HighBottom = 0;
+  HighTop = LShiftU64 (1, VTdInfo->HostAddressWidth + 1);
+
+  Status = SetDmaProtectedRange (
+             VTdInfo,
+             VTdInfo->EngineMask,
+             (UINT32)LowBottom,
+             (UINT32)(LowTop - LowBottom),
+             HighBottom,
+             HighTop - HighBottom
+             );
+
+  return Status;
+}
+
+/**
+  Initializes the Intel VTd PMR for DMA buffer.
+
+  @retval EFI_SUCCESS            Usb bot driver is successfully initialized.
+  @retval EFI_OUT_OF_RESOURCES   Can't initialize the driver.
+
+**/
+EFI_STATUS
+InitVTdPmrForDma (
+  VOID
+  )
+{
+  EFI_STATUS                  Status;
+  VOID                        *Hob;
+  VTD_INFO                    *VTdInfo;
+
+  Hob = GetFirstGuidHob (&mVTdInfoGuid);
+  VTdInfo = GET_GUID_HOB_DATA(Hob);
+
+  //
+  // If there is RMRR memory, parse it here.
+  //
+  ParseDmarAcpiTableRmrr (VTdInfo);
+
+  //
+  // Allocate a range in PEI memory as DMA buffer
+  // Mark others to be DMA protected.
+  //
+  Status = InitDmaProtection (VTdInfo);
+
+  return Status;
 }
 
 /**
@@ -1125,13 +639,21 @@ S3EndOfPeiNotify(
   IN VOID                      *Ppi
   )
 {
+  VOID                        *Hob;
+  VTD_INFO                    *VTdInfo;
   UINT64                      EngineMask;
 
   DEBUG((DEBUG_INFO, "VTdPmr S3EndOfPeiNotify\n"));
 
   if ((PcdGet8(PcdVTdPolicyPropertyMask) & BIT1) == 0) {
-    EngineMask = LShiftU64 (1, mVTdInfo->VTdEngineCount) - 1;
-    DisableDmaProtection (EngineMask);
+    Hob = GetFirstGuidHob (&mVTdInfoGuid);
+    if (Hob == NULL) {
+      return EFI_SUCCESS;
+    }
+    VTdInfo = GET_GUID_HOB_DATA(Hob);
+
+    EngineMask = LShiftU64 (1, VTdInfo->VTdEngineCount) - 1;
+    DisableDmaProtection (VTdInfo, EngineMask);
   }
   return EFI_SUCCESS;
 }
@@ -1140,6 +662,100 @@ EFI_PEI_NOTIFY_DESCRIPTOR mS3EndOfPeiNotifyDesc = {
   (EFI_PEI_PPI_DESCRIPTOR_NOTIFY_CALLBACK | EFI_PEI_PPI_DESCRIPTOR_TERMINATE_LIST),
   &gEfiEndOfPeiSignalPpiGuid,
   S3EndOfPeiNotify
+};
+
+/**
+  This function handles VTd engine setup
+
+  @param[in] PeiServices    Pointer to PEI Services Table.
+  @param[in] NotifyDesc     Pointer to the descriptor for the Notification event that
+                            caused this function to execute.
+  @param[in] Ppi            Pointer to the PPI data associated with this function.
+
+  @retval EFI_STATUS        Always return EFI_SUCCESS
+**/
+EFI_STATUS
+EFIAPI
+VTdInfoNotify (
+  IN EFI_PEI_SERVICES          **PeiServices,
+  IN EFI_PEI_NOTIFY_DESCRIPTOR *NotifyDesc,
+  IN VOID                      *Ppi
+  )
+{
+  EFI_STATUS                  Status;
+  VOID                        *MemoryDiscovered;
+  UINT64                      EnabledEngineMask;
+  VOID                        *Hob;
+  VTD_INFO                    *VTdInfo;
+  BOOLEAN                     MemoryInitialized;
+
+  DEBUG ((DEBUG_INFO, "VTdInfoNotify\n"));
+
+  //
+  // Check if memory is initialized.
+  //
+  MemoryInitialized = FALSE;
+  Status = PeiServicesLocatePpi (
+             &gEfiPeiMemoryDiscoveredPpiGuid,
+             0,
+             NULL,
+             &MemoryDiscovered
+             );
+  if (!EFI_ERROR(Status)) {
+    MemoryInitialized = TRUE;
+  }
+
+  DEBUG ((DEBUG_INFO, "MemoryInitialized - %x\n", MemoryInitialized));
+
+  if (!MemoryInitialized) {
+    //
+    // If the memory is not initialized,
+    // Protect all system memory
+    //
+    InitVTdInfo ();
+    InitVTdPmrForAll ();
+
+    //
+    // Install PPI.
+    //
+    Status = PeiServicesInstallPpi (&mIoMmuPpiList);
+    ASSERT_EFI_ERROR(Status);
+  } else {
+    //
+    // If the memory is initialized,
+    // Allocate DMA buffer and protect rest system memory
+    //
+
+    //
+    // NOTE: We need reinit VTdInfo because previous information might be overriden.
+    //
+    InitVTdInfo ();
+
+    Hob = GetFirstGuidHob (&mVTdInfoGuid);
+    VTdInfo = GET_GUID_HOB_DATA(Hob);
+
+    //
+    // NOTE: We need check if PMR is enabled or not.
+    //
+    EnabledEngineMask = GetDmaProtectionEnabledEngineMask (VTdInfo, VTdInfo->EngineMask);
+    if (EnabledEngineMask != 0) {
+      EnableVTdTranslationProtection (VTdInfo, EnabledEngineMask);
+      DisableDmaProtection (VTdInfo, EnabledEngineMask);
+    }
+    InitVTdPmrForDma ();
+    if (EnabledEngineMask != 0) {
+      DisableVTdTranslationProtection (VTdInfo, EnabledEngineMask);
+    }
+
+  }
+
+  return EFI_SUCCESS;
+}
+
+EFI_PEI_NOTIFY_DESCRIPTOR mVTdInfoNotifyDesc = {
+  (EFI_PEI_PPI_DESCRIPTOR_NOTIFY_CALLBACK | EFI_PEI_PPI_DESCRIPTOR_TERMINATE_LIST),
+  &gEdkiiVTdInfoPpiGuid,
+  VTdInfoNotify
 };
 
 /**
@@ -1161,71 +777,40 @@ IntelVTdPmrInitialize (
 {
   EFI_STATUS                  Status;
   EFI_BOOT_MODE               BootMode;
+  DMA_BUFFER_INFO             *DmaBufferInfo;
+
+  DEBUG ((DEBUG_INFO, "IntelVTdPmrInitialize\n"));
 
   if ((PcdGet8(PcdVTdPolicyPropertyMask) & BIT0) == 0) {
     return EFI_UNSUPPORTED;
   }
 
+  DmaBufferInfo = BuildGuidHob (&mDmaBufferInfoGuid, sizeof(DMA_BUFFER_INFO));
+  ASSERT(DmaBufferInfo != NULL);
+  if (DmaBufferInfo == NULL) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+  ZeroMem (DmaBufferInfo, sizeof(DMA_BUFFER_INFO));
+
   PeiServicesGetBootMode (&BootMode);
 
-  Status = PeiServicesLocatePpi (
-             &gEdkiiVTdInfoPpiGuid,
-             0,
-             NULL,
-             (VOID **)&mAcpiDmarTable
-             );
-  ASSERT_EFI_ERROR(Status);
-
-  DumpAcpiDMAR (mAcpiDmarTable);
-
-  //
-  // Get DMAR information to local VTdInfo
-  //
-  Status = ParseDmarAcpiTableDrhd ();
-  if (EFI_ERROR(Status)) {
-    return Status;
-  }
-
-  //
-  // If there is RMRR memory, parse it here.
-  //
-  ParseDmarAcpiTableRmrr ();
-
   if (BootMode == BOOT_ON_S3_RESUME) {
-    mDmaBufferSize = TOTAL_DMA_BUFFER_SIZE_S3;
+    DmaBufferInfo->DmaBufferSize = PcdGet32 (PcdVTdPeiDmaBufferSizeS3);
   } else {
-    mDmaBufferSize = TOTAL_DMA_BUFFER_SIZE;
-  }
-  DEBUG ((DEBUG_INFO, " DmaBufferSize : 0x%x\n", mDmaBufferSize));
-
-  //
-  // Find a pre-memory in resource hob as DMA buffer
-  // Mark PEI memory to be DMA protected.
-  //
-  Status = InitDmaProtection (mDmaBufferSize, &mDmaBufferBase);
-  if (EFI_ERROR(Status)) {
-    return Status;
+    DmaBufferInfo->DmaBufferSize = PcdGet32 (PcdVTdPeiDmaBufferSize);
   }
 
-  DEBUG ((DEBUG_INFO, " DmaBufferBase : 0x%x\n", mDmaBufferBase));
-
-  mDmaBufferCurrentTop = mDmaBufferBase + mDmaBufferSize;
-  mDmaBufferCurrentBottom = mDmaBufferBase;
+  Status = PeiServicesNotifyPpi (&mVTdInfoNotifyDesc);
+  ASSERT_EFI_ERROR (Status);
 
   //
-  // Install PPI.
-  //
-  Status = PeiServicesInstallPpi (&mIoMmuPpiList);
-  ASSERT_EFI_ERROR(Status);
-
-  //
-  // Register EndOfPei Notify for S3 to run FSP NotifyPhase
+  // Register EndOfPei Notify for S3
   //
   if (BootMode == BOOT_ON_S3_RESUME) {
     Status = PeiServicesNotifyPpi (&mS3EndOfPeiNotifyDesc);
     ASSERT_EFI_ERROR (Status);
   }
 
-  return Status;
+  return EFI_SUCCESS;
 }
 

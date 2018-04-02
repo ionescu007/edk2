@@ -1,7 +1,7 @@
 /** @file
   Internal library implementation for PCI Bus module.
 
-Copyright (c) 2006 - 2017, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2006 - 2018, Intel Corporation. All rights reserved.<BR>
 (C) Copyright 2015 Hewlett Packard Enterprise Development LP<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
@@ -1125,14 +1125,14 @@ PciScanBus (
           BusPadding = FALSE;
           if (gPciHotPlugInit != NULL) {
 
-            if (IsRootPciHotPlugBus (PciDevice->DevicePath, &HpIndex)) {
+            if (IsPciHotPlugBus (PciDevice)) {
 
               //
               // If it is initialized, get the padded bus range
               //
               Status = gPciHotPlugInit->GetResourcePadding (
                                           gPciHotPlugInit,
-                                          gPciRootHpcPool[HpIndex].HpbDevicePath,
+                                          PciDevice->DevicePath,
                                           PciAddress,
                                           &State,
                                           (VOID **) &Descriptors,
@@ -1154,11 +1154,14 @@ PciScanBus (
 
               FreePool (Descriptors);
 
-              if (EFI_ERROR (Status)) {
+              if (!EFI_ERROR (Status)) {
+                BusPadding = TRUE;
+              } else if (Status != EFI_NOT_FOUND) {
+                //
+                // EFI_NOT_FOUND is not a real error. It indicates no bus number padding requested.
+                //
                 return Status;
               }
-
-              BusPadding = TRUE;
             }
           }
         }

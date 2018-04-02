@@ -1,7 +1,7 @@
 /** @file
   Functions implementation related with DHCPv4 for UefiPxeBc Driver.
 
-  Copyright (c) 2009 - 2017, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2009 - 2018, Intel Corporation. All rights reserved.<BR>
 
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
@@ -320,6 +320,7 @@ PxeBcBuildDhcp4Options (
     //
     // Zero the Guid to indicate NOT programable if failed to get system Guid.
     //
+    DEBUG ((EFI_D_WARN, "PXE: Failed to read system GUID from the smbios table!\n"));
     ZeroMem (OptEnt.Uuid->Guid, sizeof (EFI_GUID));
   }
 
@@ -1210,6 +1211,8 @@ PxeBcDhcp4CallBack (
     return EFI_SUCCESS;
   }
 
+  ASSERT (Packet != NULL);
+
   Private   = (PXEBC_PRIVATE_DATA *) Context;
   Mode      = Private->PxeBc.Mode;
   Callback  = Private->PxeBcCallback;
@@ -1280,6 +1283,7 @@ PxeBcDhcp4CallBack (
         //
         // Zero the Guid to indicate NOT programable if failed to get system Guid.
         //
+        DEBUG ((EFI_D_WARN, "PXE: Failed to read system GUID from the smbios table!\n"));
         ZeroMem (Packet->Dhcp4.Header.ClientHwAddr, sizeof (EFI_GUID));
       }
       Packet->Dhcp4.Header.HwAddrLen = (UINT8) sizeof (EFI_GUID);
@@ -1305,6 +1309,8 @@ PxeBcDhcp4CallBack (
     break;
 
   case Dhcp4SelectOffer:
+    ASSERT (NewPacket != NULL);
+    
     //
     // Select offer by the default policy or by order, and record the SelectIndex
     // and SelectProxyType.
@@ -1466,6 +1472,7 @@ PxeBcDhcp4Discover (
       //
       // Zero the Guid to indicate NOT programable if failed to get system Guid.
       //
+      DEBUG ((EFI_D_WARN, "PXE: Failed to read system GUID from the smbios table!\n"));
       ZeroMem (Token.Packet->Dhcp4.Header.ClientHwAddr, sizeof (EFI_GUID));
     }
     Token.Packet->Dhcp4.Header.HwAddrLen = (UINT8)  sizeof (EFI_GUID);
@@ -1697,16 +1704,16 @@ PxeBcDhcp4Dora (
   ZeroMem (Private->OfferCount, sizeof (Private->OfferCount));
   ZeroMem (Private->OfferIndex, sizeof (Private->OfferIndex));
 
-  //
-  // Start DHCPv4 D.O.R.A. process to acquire IPv4 address. This may 
-  // have already been done, thus do not leave in error if the return
-  // code is EFI_ALREADY_STARTED.
-  //
   Status = Dhcp4->Start (Dhcp4, NULL);
-  if (EFI_ERROR (Status) && Status != EFI_ALREADY_STARTED) {
+  if (EFI_ERROR (Status)) {
     if (Status == EFI_ICMP_ERROR) {
       PxeMode->IcmpErrorReceived = TRUE;
     }
+
+    if (Status == EFI_TIMEOUT && Private->OfferNum > 0) {
+      Status = EFI_NO_RESPONSE;
+    }
+    
     goto ON_EXIT;
   }
 

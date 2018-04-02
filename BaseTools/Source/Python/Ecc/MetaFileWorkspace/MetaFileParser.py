@@ -228,7 +228,7 @@ class MetaFileParser(object):
                 self.Start()
 
         # No specific ARCH or Platform given, use raw data
-        if self._RawTable and (len(DataInfo) == 1 or DataInfo[1] == None):
+        if self._RawTable and (len(DataInfo) == 1 or DataInfo[1] is None):
             return self._RawTable.Query(*DataInfo)
 
         # Do post-process if necessary
@@ -564,7 +564,7 @@ class InfParser(MetaFileParser):
             self._ValueList = ['','','']
             # parse current line, result will be put in self._ValueList
             self._SectionParser[self._SectionType](self)
-            if self._ValueList == None or self._ItemType == MODEL_META_DATA_DEFINE:
+            if self._ValueList is None or self._ItemType == MODEL_META_DATA_DEFINE:
                 self._ItemType = -1
                 continue
             #
@@ -877,7 +877,7 @@ class DscParser(MetaFileParser):
 
             self._ValueList = ['', '', '']
             self._SectionParser[SectionType](self)
-            if self._ValueList == None:
+            if self._ValueList is None:
                 continue
             #
             # Model, Value1, Value2, Value3, Arch, ModuleType, BelongsToItem=-1, BelongsToFile=-1,
@@ -1197,7 +1197,7 @@ class DscParser(MetaFileParser):
                                 File=self._FileWithError, ExtraData=' '.join(self._ValueList), 
                                 Line=self._LineIndex+1)
 
-            if self._ValueList == None:
+            if self._ValueList is None:
                 continue 
 
             NewOwner = self._IdMapping.get(Owner, -1)
@@ -1573,7 +1573,7 @@ class DecParser(MetaFileParser):
             # section content
             self._ValueList = ['','','']
             self._SectionParser[self._SectionType[0]](self)
-            if self._ValueList == None or self._ItemType == MODEL_META_DATA_DEFINE:
+            if self._ValueList is None or self._ItemType == MODEL_META_DATA_DEFINE:
                 self._ItemType = -1
                 self._Comments = []
                 continue
@@ -1900,25 +1900,14 @@ class DecParser(MetaFileParser):
     }
 
 
-## FdfObject
-#
-# This class defined basic Fdf object which is used by inheriting
-# 
-# @param object:       Inherited from object class
-#
-class FdfObject(object):
-    def __init__(self):
-        object.__init__()
-
 ## Fdf
 #
 # This class defined the structure used in Fdf object
 # 
-# @param FdfObject:     Inherited from FdfObject class
 # @param Filename:      Input value for Ffilename of Fdf file, default is None
 # @param WorkspaceDir:  Input value for current workspace directory, default is None
 #
-class Fdf(FdfObject):
+class Fdf(object):
     def __init__(self, Filename = None, IsToDatabase = False, WorkspaceDir = None, Database = None):
         self.WorkspaceDir = WorkspaceDir
         self.IsToDatabase = IsToDatabase
@@ -1932,7 +1921,7 @@ class Fdf(FdfObject):
         #
         # Load Fdf file if filename is not None
         #
-        if Filename != None:
+        if Filename is not None:
             try:
                 self.LoadFdfFile(Filename)
             except Exception:

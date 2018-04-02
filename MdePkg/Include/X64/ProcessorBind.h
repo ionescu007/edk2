@@ -1,7 +1,7 @@
 /** @file
   Processor or Compiler specific defines and types x64 (Intel 64, AMD64).
 
-  Copyright (c) 2006 - 2015, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2006 - 2017, Intel Corporation. All rights reserved.<BR>
   This program and the accompanying materials                          
   are licensed and made available under the terms and conditions of the BSD License         
   which accompanies this distribution.  The full text of the license may be found at        
@@ -107,7 +107,7 @@
 //
 #pragma warning ( disable : 4206 )
 
-#if _MSC_VER == 1800 || _MSC_VER == 1900
+#if _MSC_VER == 1800 || _MSC_VER == 1900 || _MSC_VER >= 1910
 
 //
 // Disable these warnings for VS2013.
@@ -265,6 +265,11 @@ typedef INT64   INTN;
 ///
 #define MAX_INTN   ((INTN)0x7FFFFFFFFFFFFFFFULL)
 #define MAX_UINTN  ((UINTN)0xFFFFFFFFFFFFFFFFULL)
+
+///
+/// Minimum legal x64 INTN value.
+///
+#define MIN_INTN   (((INTN)-9223372036854775807LL) - 1)
 
 ///
 /// The stack alignment required for x64

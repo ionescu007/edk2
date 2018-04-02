@@ -3,7 +3,7 @@
   NVM Express specification.
 
   (C) Copyright 2014 Hewlett-Packard Development Company, L.P.<BR>
-  Copyright (c) 2013 - 2017, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2013 - 2018, Intel Corporation. All rights reserved.<BR>
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
   which accompanies this distribution.  The full text of the license may be found at
@@ -453,6 +453,7 @@ NvmExpressPassThru (
 {
   NVME_CONTROLLER_PRIVATE_DATA   *Private;
   EFI_STATUS                     Status;
+  EFI_STATUS                     PreviousStatus;
   EFI_PCI_IO_PROTOCOL            *PciIo;
   NVME_SQ                        *Sq;
   NVME_CQ                        *Cq;
@@ -592,7 +593,8 @@ NvmExpressPassThru (
   // these two cmds are special which requires their data buffer must support simultaneous access by both the
   // processor and a PCI Bus Master. It's caller's responsbility to ensure this.
   //
-  if (((Sq->Opc & (BIT0 | BIT1)) != 0) && (Sq->Opc != NVME_ADMIN_CRIOCQ_CMD) && (Sq->Opc != NVME_ADMIN_CRIOSQ_CMD)) {
+  if (((Sq->Opc & (BIT0 | BIT1)) != 0) &&
+      !((Packet->QueueType == NVME_ADMIN_QUEUE) && ((Sq->Opc == NVME_ADMIN_CRIOCQ_CMD) || (Sq->Opc == NVME_ADMIN_CRIOSQ_CMD)))) {
     if ((Packet->TransferLength == 0) || (Packet->TransferBuffer == NULL)) {
       return EFI_INVALID_PARAMETER;
     }
@@ -831,6 +833,7 @@ NvmExpressPassThru (
   }
 
   Data = ReadUnaligned32 ((UINT32*)&Private->CqHdbl[QueueId]);
+  PreviousStatus = Status;
   Status = PciIo->Mem.Write (
                PciIo,
                EfiPciIoWidthUint32,
@@ -839,6 +842,9 @@ NvmExpressPassThru (
                1,
                &Data
                );
+  // The return status of PciIo->Mem.Write should not override
+  // previous status if previous status contains error.
+  Status = EFI_ERROR (PreviousStatus) ? PreviousStatus : Status;
 
   //
   // For now, the code does not support the non-blocking feature for admin queue.

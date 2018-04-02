@@ -1,7 +1,7 @@
 /** @file
 Agent Module to load other modules to deploy SMM Entry Vector for X86 CPU.
 
-Copyright (c) 2009 - 2017, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2009 - 2018, Intel Corporation. All rights reserved.<BR>
 Copyright (c) 2017, AMD Incorporated. All rights reserved.<BR>
 
 This program and the accompanying materials
@@ -74,6 +74,15 @@ EFI_HANDLE  mSmmCpuHandle = NULL;
 EFI_SMM_CPU_PROTOCOL  mSmmCpu  = {
   SmmReadSaveState,
   SmmWriteSaveState
+};
+
+///
+/// SMM Memory Attribute Protocol instance
+///
+EDKII_SMM_MEMORY_ATTRIBUTE_PROTOCOL  mSmmMemoryAttribute  = {
+  EdkiiSmmGetMemoryAttributes,
+  EdkiiSmmSetMemoryAttributes,
+  EdkiiSmmClearMemoryAttributes
 };
 
 EFI_CPU_INTERRUPT_HANDLER   mExternalVectorTable[EXCEPTION_VECTOR_NUMBER];
@@ -534,6 +543,12 @@ PiCpuSmmEntry (
   UINT32                     Cr3;
 
   //
+  // Initialize address fixup
+  //
+  PiSmmCpuSmmInitFixupAddress ();
+  PiSmmCpuSmiEntryFixupAddress ();
+
+  //
   // Initialize Debug Agent to support source level debug in SMM code
   //
   InitializeDebugAgent (DEBUG_AGENT_INIT_SMM, NULL, NULL);
@@ -890,6 +905,17 @@ PiCpuSmmEntry (
                     &gEfiSmmCpuProtocolGuid,
                     EFI_NATIVE_INTERFACE,
                     &mSmmCpu
+                    );
+  ASSERT_EFI_ERROR (Status);
+
+  //
+  // Install the SMM Memory Attribute Protocol into SMM protocol database
+  //
+  Status = gSmst->SmmInstallProtocolInterface (
+                    &mSmmCpuHandle,
+                    &gEdkiiSmmMemoryAttributeProtocolGuid,
+                    EFI_NATIVE_INTERFACE,
+                    &mSmmMemoryAttribute
                     );
   ASSERT_EFI_ERROR (Status);
 

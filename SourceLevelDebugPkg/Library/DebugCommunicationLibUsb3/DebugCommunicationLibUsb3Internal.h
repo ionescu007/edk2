@@ -1,7 +1,7 @@
 /** @file
   Debug Port Library implementation based on usb3 debug port.
 
-  Copyright (c) 2014 - 2015, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2014 - 2018, Intel Corporation. All rights reserved.<BR>
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
   which accompanies this distribution.  The full text of the license may be found at
@@ -46,6 +46,7 @@
 #define USB3DBG_DBG_CAB       1   // The XHCI host controller supports debug capability
 #define USB3DBG_ENABLED       2   // The XHCI debug device is enabled
 #define USB3DBG_NOT_ENABLED   4   // The XHCI debug device is not enabled
+#define USB3DBG_UNINITIALIZED 255 // The XHCI debug device is uninitialized
 
 #define USB3_DEBUG_PORT_WRITE_MAX_PACKET_SIZE 0x08
 
@@ -456,7 +457,7 @@ typedef struct _USB3_DEBUG_PORT_INSTANCE {
   UINT8                                   Initialized;
 
   //
-  // The flag indicates debug device is ready
+  // The flag indicates debug capability is supported
   //
   BOOLEAN                                 DebugSupport;
   
@@ -464,6 +465,21 @@ typedef struct _USB3_DEBUG_PORT_INSTANCE {
   // The flag indicates debug device is ready
   //
   BOOLEAN                                 Ready;
+
+  //
+  // The flag indicates the instance is from HOB
+  //
+  BOOLEAN                                 FromHob;
+
+  //
+  // Prevent notification being interrupted by debug timer
+  //
+  BOOLEAN                                 InNotify;
+
+  //
+  // PciIo protocol event
+  //
+  EFI_PHYSICAL_ADDRESS                    PciIoEvent;
 
   //
   // The flag indicates if USB 3.0 ports has been turn off/on power
@@ -540,7 +556,7 @@ typedef struct _USB3_DEBUG_PORT_INSTANCE {
 UINT32
 XhcReadDebugReg (
   IN  USB3_DEBUG_PORT_HANDLE    *Handle,
-  IN  UINT32                      Offset
+  IN  UINT32                    Offset
   );
 
 /**
@@ -554,8 +570,8 @@ XhcReadDebugReg (
 VOID
 XhcSetDebugRegBit (
   IN USB3_DEBUG_PORT_HANDLE  *Handle,
-  IN UINT32                   Offset,
-  IN UINT32                   Bit
+  IN UINT32                  Offset,
+  IN UINT32                  Bit
   );
   
 /**
@@ -571,43 +587,6 @@ XhcWriteDebugReg (
   IN USB3_DEBUG_PORT_HANDLE     *Handle,
   IN UINT32                     Offset,
   IN UINT32                     Data
-  );
-
-/**
-  Discover the USB3 debug device.
-  
-  @param  Handle                Debug port handle.
-  
-  @retval RETURN_SUCCESS        The serial device was initialized.
-  @retval RETURN_DEVICE_ERROR   The serial device could not be initialized.
-
-**/
-RETURN_STATUS
-DiscoverUsb3DebugPort(
-  USB3_DEBUG_PORT_HANDLE  *Handle
-  );
-  
-/**
-  Initialize the Serial Device hardware.
-  
-  @param  Handle            Debug port handle.
-
-  @retval RETURN_SUCCESS    The serial device was initialized successfully.
-  @retval !RETURN_SUCCESS   Error.
-
-**/
-RETURN_STATUS
-InitializeUsb3DebugPort (
-  USB3_DEBUG_PORT_HANDLE  *Handle
-  );
-
-/**
-  Return XHCI MMIO base address.
-
-**/
-EFI_PHYSICAL_ADDRESS
-GetXhciBaseAddress (
-  VOID
   );
 
 /**
@@ -726,6 +705,39 @@ XhcDataTransfer (
   IN OUT VOID                                *Data,
   IN OUT UINTN                               *DataLength,
   IN     UINTN                               Timeout
+  );
+
+/**
+  Initialize usb debug port hardware.
+
+  @param  Handle           Debug port handle.
+
+  @retval TRUE             The usb debug port hardware configuration is changed.
+  @retval FALSE            The usb debug port hardware configuration is not changed.
+
+**/
+RETURN_STATUS
+EFIAPI
+InitializeUsbDebugHardware (
+  IN USB3_DEBUG_PORT_HANDLE *Handle
+  );
+
+/**
+  Return USB3 debug instance address pointer.
+
+**/  
+EFI_PHYSICAL_ADDRESS *
+GetUsb3DebugPortInstanceAddrPtr (
+  VOID
+  );
+
+/**
+  Return USB3 debug instance address.
+
+**/  
+USB3_DEBUG_PORT_HANDLE *
+GetUsb3DebugPortInstance (
+  VOID
   );
 
 #endif //__SERIAL_PORT_LIB_USB__

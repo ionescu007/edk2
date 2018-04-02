@@ -63,7 +63,7 @@
 
 [Guids]
   gEfiEventExitBootServicesGuid                 ## CONSUMES  ## Event
-  gEfiEventLegacyBootGuid                       ## CONSUMES  ## Event
+  gEfiEventLegacyBootGuid                       ## SOMETIMES_CONSUMES  ## Event
 
 [Pcd]
   gUefiCpuPkgTokenSpaceGuid.PcdCpuMaxLogicalProcessorNumber        ## CONSUMES
@@ -73,4 +73,5 @@
   gUefiCpuPkgTokenSpaceGuid.PcdCpuMicrocodePatchRegionSize         ## CONSUMES
   gUefiCpuPkgTokenSpaceGuid.PcdCpuApLoopMode                       ## CONSUMES
   gUefiCpuPkgTokenSpaceGuid.PcdCpuApTargetCstate                   ## SOMETIMES_CONSUMES
+  gEfiMdeModulePkgTokenSpaceGuid.PcdCpuStackGuard                  ## CONSUMES
 

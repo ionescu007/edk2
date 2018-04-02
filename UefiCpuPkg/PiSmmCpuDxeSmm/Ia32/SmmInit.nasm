@@ -1,5 +1,5 @@
 ;------------------------------------------------------------------------------ ;
-; Copyright (c) 2016, Intel Corporation. All rights reserved.<BR>
+; Copyright (c) 2016 - 2018, Intel Corporation. All rights reserved.<BR>
 ; This program and the accompanying materials
 ; are licensed and made available under the terms and conditions of the BSD License
 ; which accompanies this distribution.  The full text of the license may be found at
@@ -41,23 +41,35 @@ ASM_PFX(gcSmiInitGdtr):
             DQ      0
 
 global ASM_PFX(SmmStartup)
+
+BITS 16
 ASM_PFX(SmmStartup):
-    DB      0x66, 0xb8
+    mov     eax, 0x80000001             ; read capability
+    cpuid
+    mov     ebx, edx                    ; rdmsr will change edx. keep it in ebx.
+    and     ebx, BIT20                  ; extract NX capability bit
+    shr     ebx, 9                      ; shift bit to IA32_EFER.NXE[BIT11] position
+    DB      0x66, 0xb8                  ; mov eax, imm32
 ASM_PFX(gSmmCr3): DD 0
     mov     cr3, eax
-    DB      0x67, 0x66
-    lgdt    [cs:ebp + (ASM_PFX(gcSmiInitGdtr) - ASM_PFX(SmmStartup))]
-    DB      0x66, 0xb8
+o32 lgdt    [cs:ebp + (ASM_PFX(gcSmiInitGdtr) - ASM_PFX(SmmStartup))]
+    DB      0x66, 0xb8                  ; mov eax, imm32
 ASM_PFX(gSmmCr4): DD 0
     mov     cr4, eax
-    DB      0x66, 0xb8
+    mov     ecx, 0xc0000080             ; IA32_EFER MSR
+    rdmsr
+    or      eax, ebx                    ; set NXE bit if NX is available
+    wrmsr
+    DB      0x66, 0xb8                  ; mov eax, imm32
 ASM_PFX(gSmmCr0): DD 0
-    DB      0xbf, PROTECT_MODE_DS, 0    ; mov di, PROTECT_MODE_DS
+    mov     di, PROTECT_MODE_DS
     mov     cr0, eax
-    DB      0x66, 0xea                   ; jmp far [ptr48]
+    DB      0x66, 0xea                  ; jmp far [ptr48]
 ASM_PFX(gSmmJmpAddr):
     DD      @32bit
     DW      PROTECT_MODE_CS
+
+BITS 32
 @32bit:
     mov     ds, edi
     mov     es, edi
@@ -85,3 +97,7 @@ ASM_PFX(SmmRelocationSemaphoreComplete):
     mov     byte [eax], 1
     pop     eax
     jmp     [ASM_PFX(mSmmRelocationOriginalAddress)]
+
+global ASM_PFX(PiSmmCpuSmmInitFixupAddress)
+ASM_PFX(PiSmmCpuSmmInitFixupAddress):
+    ret

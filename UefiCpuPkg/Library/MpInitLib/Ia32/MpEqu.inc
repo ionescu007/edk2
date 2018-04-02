@@ -33,11 +33,17 @@ GdtrLocation                  equ        LockLocation + 10h
 IdtrLocation                  equ        LockLocation + 16h
 BufferStartLocation           equ        LockLocation + 1Ch
 ModeOffsetLocation            equ        LockLocation + 20h
-NumApsExecutingLocation       equ        LockLocation + 24h
+ApIndexLocation               equ        LockLocation + 24h
 CodeSegmentLocation           equ        LockLocation + 28h
 DataSegmentLocation           equ        LockLocation + 2Ch
 EnableExecuteDisableLocation  equ        LockLocation + 30h
 Cr3Location                   equ        LockLocation + 34h
 InitFlagLocation              equ        LockLocation + 38h
 CpuInfoLocation               equ        LockLocation + 3Ch
+NumApsExecutingLocation       equ        LockLocation + 40h
+InitializeFloatingPointUnitsAddress equ  LockLocation + 48h
+ModeTransitionMemoryLocation        equ  LockLocation + 4Ch
+ModeTransitionSegmentLocation       equ  LockLocation + 50h
+ModeHighMemoryLocation              equ  LockLocation + 52h
+ModeHighSegmentLocation             equ  LockLocation + 56h
 

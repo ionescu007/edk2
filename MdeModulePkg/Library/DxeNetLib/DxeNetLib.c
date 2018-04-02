@@ -1,7 +1,7 @@
 /** @file
   Network library.
 
-Copyright (c) 2005 - 2017, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2005 - 2018, Intel Corporation. All rights reserved.<BR>
 (C) Copyright 2015 Hewlett Packard Enterprise Development LP<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
@@ -19,6 +19,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #include <Protocol/DriverBinding.h>
 #include <Protocol/ServiceBinding.h>
 #include <Protocol/SimpleNetwork.h>
+#include <Protocol/AdapterInformation.h>
 #include <Protocol/ManagedNetwork.h>
 #include <Protocol/Ip4Config2.h>
 #include <Protocol/ComponentName.h>
@@ -37,7 +38,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #include <Library/PrintLib.h>
 #include <Library/UefiLib.h>
 
-#define NIC_ITEM_CONFIG_SIZE   sizeof (NIC_IP4_CONFIG_INFO) + sizeof (EFI_IP4_ROUTE_TABLE) * MAX_IP4_CONFIG_IN_VARIABLE
+#define NIC_ITEM_CONFIG_SIZE   (sizeof (NIC_IP4_CONFIG_INFO) + sizeof (EFI_IP4_ROUTE_TABLE) * MAX_IP4_CONFIG_IN_VARIABLE)
 #define DEFAULT_ZERO_START     ((UINTN) ~0)
 
 //
@@ -197,6 +198,7 @@ SyslogLocateSnp (
   fill in the source MAC because it will try to locate a SNP each
   time it is called to avoid the problem if SNP is unloaded.
   This code snip is copied from MNP.
+  If Packet is NULL, then ASSERT().
 
   @param[in] Packet          The Syslog packet
   @param[in] Length          The length of the packet
@@ -217,6 +219,8 @@ SyslogSendPacket (
   EFI_STATUS                  Status;
   EFI_EVENT                   TimeoutEvent;
   UINT8                       *TxBuf;
+
+  ASSERT (Packet != NULL);
 
   Snp = SyslogLocateSnp ();
 
@@ -309,7 +313,7 @@ ON_EXIT:
   @param[in]  BufLen    The lenght of the Buf
   @param[out] Buf       The buffer to put the packet data
 
-  @return The length of the syslog packet built.
+  @return The length of the syslog packet built, 0 represents no packet is built.
 
 **/
 UINT32
@@ -323,6 +327,7 @@ SyslogBuildPacket (
   OUT CHAR8                 *Buf
   )
 {
+  EFI_STATUS                Status;
   ETHER_HEAD                *Ether;
   IP4_HEAD                  *Ip4;
   EFI_UDP_HEADER            *Udp4;
@@ -378,8 +383,10 @@ SyslogBuildPacket (
   // Build the syslog message body with <PRI> Timestamp  machine module Message
   //
   Pri = ((NET_SYSLOG_FACILITY & 31) << 3) | (Level & 7);
-  gRT->GetTime (&Time, NULL);
-  ASSERT ((Time.Month <= 12) && (Time.Month >= 1));
+  Status = gRT->GetTime (&Time, NULL);
+  if (EFI_ERROR (Status)) {
+    return 0;
+  }
 
   //
   // Use %a to format the ASCII strings, %s to format UNICODE strings
@@ -396,7 +403,6 @@ SyslogBuildPacket (
                     Time.Minute,
                     Time.Second
                     );
-  Len--;
 
   Len += (UINT32) AsciiSPrint (
                     Buf + Len,
@@ -407,7 +413,7 @@ SyslogBuildPacket (
                     Line,
                     File
                     );
-  Len--;
+  Len ++;
 
   //
   // OK, patch the IP length/checksum and UDP length fields.
@@ -438,6 +444,8 @@ SyslogBuildPacket (
            NetDebugASPrint ("State transit to %a\n", Name)
          )
 
+  If Format is NULL, then ASSERT().
+
   @param Format  The ASCII format string.
   @param ...     The variable length parameter whose format is determined
                  by the Format string.
@@ -455,6 +463,8 @@ NetDebugASPrint (
 {
   VA_LIST                   Marker;
   CHAR8                     *Buf;
+
+  ASSERT (Format != NULL);
 
   Buf = (CHAR8 *) AllocatePool (NET_DEBUG_MSG_LEN);
 
@@ -482,7 +492,8 @@ NetDebugASPrint (
   @param Message  The user message to log.
 
   @retval EFI_INVALID_PARAMETER Any input parameter is invalid.
-  @retval EFI_OUT_OF_RESOURCES  Failed to allocate memory for the packet
+  @retval EFI_OUT_OF_RESOURCES  Failed to allocate memory for the packet.
+  @retval EFI_DEVICE_ERROR      Device error occurs.
   @retval EFI_SUCCESS           The log is discard because that it is more verbose
                                 than the mNetDebugLevelMax. Or, it has been sent out.
 **/
@@ -503,7 +514,7 @@ NetDebugOutput (
   //
   // Check whether the message should be sent out
   //
-  if (Message == NULL) {
+  if (Message == NULL || File == NULL || Module == NULL) {
     return EFI_INVALID_PARAMETER;
   }
 
@@ -536,9 +547,13 @@ NetDebugOutput (
           NET_SYSLOG_PACKET_LEN,
           Packet
           );
+  if (Len == 0) {
+    Status = EFI_DEVICE_ERROR;
+  } else {
+    mSyslogPacketSeq++;
+    Status = SyslogSendPacket (Packet, Len);
+  }
 
-  mSyslogPacketSeq++;
-  Status = SyslogSendPacket (Packet, Len);
   FreePool (Packet);
 
 ON_EXIT:
@@ -637,7 +652,9 @@ NetGetIpClass (
 
   ASSERT if NetMask is zero.
   
-  If all bits of the host address of IP are 0 or 1, IP is also not a valid unicast address.
+  If all bits of the host address of IP are 0 or 1, IP is also not a valid unicast address,
+  except when the originator is one of the endpoints of a point-to-point link with a 31-bit
+  mask (RFC3021).
 
   @param[in]  Ip                    The IP to check against.
   @param[in]  NetMask               The mask of the IP.
@@ -657,9 +674,13 @@ NetIp4IsUnicast (
   if (Ip == 0 || IP4_IS_LOCAL_BROADCAST (Ip)) {
     return FALSE;
   }
-  
-  if (((Ip &~NetMask) == ~NetMask) || ((Ip &~NetMask) == 0)) {
-    return FALSE;
+
+  if (NetGetMaskLength (NetMask) != 31) {
+    if (((Ip &~NetMask) == ~NetMask) || ((Ip &~NetMask) == 0)) {
+      return FALSE;
+    }
+  } else {
+    return TRUE;
   }
 
   return TRUE;
@@ -667,6 +688,8 @@ NetIp4IsUnicast (
 
 /**
   Check whether the incoming IPv6 address is a valid unicast address.
+
+  ASSERT if Ip6 is NULL.
 
   If the address is a multicast address has binary 0xFF at the start, it is not
   a valid unicast address. If the address is unspecified ::, it is not a valid
@@ -687,6 +710,8 @@ NetIp6IsValidUnicast (
 {
   UINT8 Byte;
   UINT8 Index;
+
+  ASSERT (Ip6 != NULL);
 
   if (Ip6->Addr[0] == 0xFF) {
     return FALSE;
@@ -710,6 +735,8 @@ NetIp6IsValidUnicast (
 /**
   Check whether the incoming Ipv6 address is the unspecified address or not.
 
+  ASSERT if Ip6 is NULL.
+
   @param[in] Ip6   - Ip6 address, in network order.
 
   @retval TRUE     - Yes, unspecified
@@ -724,6 +751,8 @@ NetIp6IsUnspecifiedAddr (
 {
   UINT8 Index;
 
+  ASSERT (Ip6 != NULL);
+
   for (Index = 0; Index < 16; Index++) {
     if (Ip6->Addr[Index] != 0) {
       return FALSE;
@@ -735,6 +764,8 @@ NetIp6IsUnspecifiedAddr (
 
 /**
   Check whether the incoming Ipv6 address is a link-local address.
+
+  ASSERT if Ip6 is NULL.
 
   @param[in] Ip6   - Ip6 address, in network order.
 
@@ -772,6 +803,9 @@ NetIp6IsLinkLocalAddr (
 /**
   Check whether the Ipv6 address1 and address2 are on the connected network.
 
+  ASSERT if Ip1 or Ip2 is NULL.
+  ASSERT if PrefixLength exceeds or equals to IP6_PREFIX_MAX.
+
   @param[in] Ip1          - Ip6 address1, in network order.
   @param[in] Ip2          - Ip6 address2, in network order.
   @param[in] PrefixLength - The prefix length of the checking net.
@@ -792,7 +826,7 @@ NetIp6IsNetEqual (
   UINT8 Bit;
   UINT8 Mask;
 
-  ASSERT ((Ip1 != NULL) && (Ip2 != NULL) && (PrefixLength <= IP6_PREFIX_MAX));
+  ASSERT ((Ip1 != NULL) && (Ip2 != NULL) && (PrefixLength < IP6_PREFIX_MAX));
 
   if (PrefixLength == 0) {
     return TRUE;
@@ -809,6 +843,9 @@ NetIp6IsNetEqual (
     Mask = (UINT8) (0xFF << (8 - Bit));
 
     ASSERT (Byte < 16);
+    if (Byte >= 16) {
+      return FALSE;
+    }
     if ((Ip1->Addr[Byte] & Mask) != (Ip2->Addr[Byte] & Mask)) {
       return FALSE;
     }
@@ -820,6 +857,8 @@ NetIp6IsNetEqual (
 
 /**
   Switches the endianess of an IPv6 address
+
+  ASSERT if Ip6 is NULL.
 
   This function swaps the bytes in a 128-bit IPv6 address to switch the value
   from little endian to big endian or vice versa. The byte swapped value is
@@ -838,6 +877,8 @@ Ip6Swap128 (
 {
   UINT64 High;
   UINT64 Low;
+
+  ASSERT (Ip6 != NULL);
 
   CopyMem (&High, Ip6, sizeof (UINT64));
   CopyMem (&Low, &Ip6->Addr[8], sizeof (UINT64));
@@ -886,6 +927,8 @@ NetRandomInitSeed (
 /**
   Extract a UINT32 from a byte stream.
 
+  ASSERT if Buf is NULL.
+
   Copy a UINT32 from a byte stream, then converts it from Network
   byte order to host byte order. Use this function to avoid alignment error.
 
@@ -902,6 +945,8 @@ NetGetUint32 (
 {
   UINT32                    Value;
 
+  ASSERT (Buf != NULL);
+
   CopyMem (&Value, Buf, sizeof (UINT32));
   return NTOHL (Value);
 }
@@ -909,6 +954,8 @@ NetGetUint32 (
 
 /**
   Put a UINT32 to the byte stream in network byte order.
+
+  ASSERT if Buf is NULL.
 
   Converts a UINT32 from host byte order to network byte order. Then copy it to the
   byte stream.
@@ -924,6 +971,8 @@ NetPutUint32 (
   IN     UINT32                Data
   )
 {
+  ASSERT (Buf != NULL);
+
   Data = HTONL (Data);
   CopyMem (Buf, &Data, sizeof (UINT32));
 }
@@ -1022,6 +1071,8 @@ NetListRemoveTail (
 /**
   Insert a new node entry after a designated node entry of a doubly linked list.
 
+  ASSERT if PrevEntry or NewEntry is NULL.
+
   Inserts a new node entry donated by NewEntry after the node entry donated by PrevEntry
   of the doubly linked list.
 
@@ -1036,6 +1087,8 @@ NetListInsertAfter (
   IN OUT LIST_ENTRY         *NewEntry
   )
 {
+  ASSERT (PrevEntry != NULL && NewEntry != NULL);
+
   NewEntry->BackLink                = PrevEntry;
   NewEntry->ForwardLink             = PrevEntry->ForwardLink;
   PrevEntry->ForwardLink->BackLink  = NewEntry;
@@ -1045,6 +1098,8 @@ NetListInsertAfter (
 
 /**
   Insert a new node entry before a designated node entry of a doubly linked list.
+
+  ASSERT if PostEntry or NewEntry is NULL.
 
   Inserts a new node entry donated by NewEntry after the node entry donated by PostEntry
   of the doubly linked list.
@@ -1060,6 +1115,8 @@ NetListInsertBefore (
   IN OUT LIST_ENTRY     *NewEntry
   )
 {
+  ASSERT (PostEntry != NULL && NewEntry != NULL);
+
   NewEntry->ForwardLink             = PostEntry;
   NewEntry->BackLink                = PostEntry->BackLink;
   PostEntry->BackLink->ForwardLink  = NewEntry;
@@ -1258,7 +1315,6 @@ NetMapClean (
 
   If Map is NULL, then ASSERT().
 
-
   @param[in]  Map                   The net map to test.
 
   @return TRUE if the netmap is empty, otherwise FALSE.
@@ -1278,6 +1334,8 @@ NetMapIsEmpty (
 /**
   Return the number of the <Key, Value> pairs in the netmap.
 
+  If Map is NULL, then ASSERT().
+
   @param[in]  Map                   The netmap to get the entry number.
 
   @return The entry number in the netmap.
@@ -1289,6 +1347,7 @@ NetMapGetCount (
   IN NET_MAP                *Map
   )
 {
+  ASSERT (Map != NULL);
   return Map->Count;
 }
 
@@ -1353,6 +1412,7 @@ NetMapAllocItem (
   pairs in the netmap increase by 1.
 
   If Map is NULL, then ASSERT().
+  If Key is NULL, then ASSERT().
 
   @param[in, out]  Map                   The netmap to insert into.
   @param[in]       Key                   The user's key.
@@ -1372,7 +1432,7 @@ NetMapInsertHead (
 {
   NET_MAP_ITEM              *Item;
 
-  ASSERT (Map != NULL);
+  ASSERT (Map != NULL && Key != NULL);
 
   Item = NetMapAllocItem (Map);
 
@@ -1397,6 +1457,7 @@ NetMapInsertHead (
   pairs in the netmap increase by 1.
 
   If Map is NULL, then ASSERT().
+  If Key is NULL, then ASSERT().
 
   @param[in, out]  Map                   The netmap to insert into.
   @param[in]       Key                   The user's key.
@@ -1416,7 +1477,7 @@ NetMapInsertTail (
 {
   NET_MAP_ITEM              *Item;
 
-  ASSERT (Map != NULL);
+  ASSERT (Map != NULL && Key != NULL);
 
   Item = NetMapAllocItem (Map);
 
@@ -1437,6 +1498,9 @@ NetMapInsertTail (
 /**
   Check whether the item is in the Map and return TRUE if it is.
 
+  If Map is NULL, then ASSERT().
+  If Item is NULL, then ASSERT().
+
   @param[in]  Map                   The netmap to search within.
   @param[in]  Item                  The item to search.
 
@@ -1450,6 +1514,8 @@ NetItemInMap (
   )
 {
   LIST_ENTRY            *ListEntry;
+
+  ASSERT (Map != NULL && Item != NULL);
 
   NET_LIST_FOR_EACH (ListEntry, &Map->Used) {
     if (ListEntry == &Item->Link) {
@@ -1468,6 +1534,7 @@ NetItemInMap (
   item with the key to search. It returns the point to the item contains the Key if found.
 
   If Map is NULL, then ASSERT().
+  If Key is NULL, then ASSERT().
 
   @param[in]  Map                   The netmap to search within.
   @param[in]  Key                   The key to search.
@@ -1485,7 +1552,7 @@ NetMapFindKey (
   LIST_ENTRY              *Entry;
   NET_MAP_ITEM            *Item;
 
-  ASSERT (Map != NULL);
+  ASSERT (Map != NULL && Key != NULL);
 
   NET_LIST_FOR_EACH (Entry, &Map->Used) {
     Item = NET_LIST_USER_STRUCT (Entry, NET_MAP_ITEM, Link);
@@ -2088,6 +2155,9 @@ NetLibGetVlanHandle (
 /**
   Get MAC address associated with the network service handle.
 
+  If MacAddress is NULL, then ASSERT().
+  If AddressSize is NULL, then ASSERT().
+
   There should be MNP Service Binding Protocol installed on the input ServiceHandle.
   If SNP is installed on the ServiceHandle or its parent handle, MAC address will
   be retrieved from SNP. If no SNP found, try to get SNP mode data use MNP.
@@ -2192,6 +2262,8 @@ NetLibGetMacAddress (
   Convert MAC address of the NIC associated with specified Service Binding Handle
   to a unicode string. Callers are responsible for freeing the string storage.
 
+  If MacString is NULL, then ASSERT().
+
   Locate simple network protocol associated with the Service Binding Handle and
   get the mac address from SNP. Then convert the mac address into a unicode
   string. It takes 2 unicode characters to represent a 1 byte binary buffer.
@@ -2290,6 +2362,8 @@ NetLibGetMacString (
 
 /**
   Detect media status for specified network device.
+
+  If MediaPresent is NULL, then ASSERT().
 
   The underlying UNDI driver may or may not support reporting media status from
   GET_STATUS command (PXE_STATFLAGS_GET_STATUS_NO_MEDIA_SUPPORTED). This routine
@@ -2399,6 +2473,10 @@ NetLibDetectMedia (
                       Snp->Mode->MCastFilter
                       );
       ASSERT (MCastFilter != NULL);
+      if (MCastFilter == NULL) {
+        Status = EFI_OUT_OF_RESOURCES;
+        goto Exit;
+      }
 
       ResetMCastFilters = FALSE;
     }
@@ -2497,6 +2575,185 @@ Exit:
 }
 
 /**
+
+  Detect media state for a network device. This routine will wait for a period of time at 
+  a specified checking interval when a certain network is under connecting until connection 
+  process finishs or timeout. If Aip protocol is supported by low layer drivers, three kinds
+  of media states can be detected: EFI_SUCCESS, EFI_NOT_READY and EFI_NO_MEDIA, represents
+  connected state, connecting state and no media state respectively. When function detects 
+  the current state is EFI_NOT_READY, it will loop to wait for next time's check until state 
+  turns to be EFI_SUCCESS or EFI_NO_MEDIA. If Aip protocol is not supported, function will 
+  call NetLibDetectMedia() and return state directly.
+
+  @param[in]   ServiceHandle    The handle where network service binding protocols are
+                                installed on.
+  @param[in]   Timeout          The maximum number of 100ns units to wait when network
+                                is connecting. Zero value means detect once and return
+                                immediately.
+  @param[out]  MediaState       The pointer to the detected media state.
+
+  @retval EFI_SUCCESS           Media detection success.
+  @retval EFI_INVALID_PARAMETER ServiceHandle is not a valid network device handle or 
+                                MediaState pointer is NULL.
+  @retval EFI_DEVICE_ERROR      A device error occurred.
+  @retval EFI_TIMEOUT           Network is connecting but timeout.
+
+**/
+EFI_STATUS
+EFIAPI
+NetLibDetectMediaWaitTimeout (
+  IN  EFI_HANDLE            ServiceHandle,
+  IN  UINT64                Timeout,
+  OUT EFI_STATUS            *MediaState
+  )
+{
+  EFI_STATUS                        Status;
+  EFI_HANDLE                        SnpHandle;
+  EFI_SIMPLE_NETWORK_PROTOCOL       *Snp;
+  EFI_ADAPTER_INFORMATION_PROTOCOL  *Aip;
+  EFI_ADAPTER_INFO_MEDIA_STATE      *MediaInfo;
+  BOOLEAN                           MediaPresent;
+  UINTN                             DataSize;
+  EFI_STATUS                        TimerStatus;
+  EFI_EVENT                         Timer;
+  UINT64                            TimeRemained;
+
+  if (MediaState == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  *MediaState = EFI_SUCCESS;
+  MediaInfo   = NULL;
+
+  //
+  // Get SNP handle
+  //
+  Snp = NULL;
+  SnpHandle = NetLibGetSnpHandle (ServiceHandle, &Snp);
+  if (SnpHandle == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  Status = gBS->HandleProtocol (
+                  SnpHandle,
+                  &gEfiAdapterInformationProtocolGuid,
+                  (VOID *) &Aip
+                  );
+  if (EFI_ERROR (Status)) {
+
+    MediaPresent = TRUE;
+    Status = NetLibDetectMedia (ServiceHandle, &MediaPresent);
+    if (!EFI_ERROR (Status)) {
+      if (MediaPresent) {
+        *MediaState = EFI_SUCCESS;
+      } else {
+        *MediaState = EFI_NO_MEDIA;
+      }
+    }
+
+    //
+    // NetLibDetectMedia doesn't support EFI_NOT_READY status, return now!
+    //
+    return Status;
+  }
+
+  Status = Aip->GetInformation (
+                  Aip,
+                  &gEfiAdapterInfoMediaStateGuid,
+                  (VOID **) &MediaInfo,
+                  &DataSize
+                  );
+  if (!EFI_ERROR (Status)) {
+
+    *MediaState = MediaInfo->MediaState;
+    FreePool (MediaInfo);
+    if (*MediaState != EFI_NOT_READY || Timeout < MEDIA_STATE_DETECT_TIME_INTERVAL) {
+
+      return EFI_SUCCESS;
+    }
+  } else {
+
+    if (MediaInfo != NULL) {
+      FreePool (MediaInfo);
+    }
+
+    if (Status == EFI_UNSUPPORTED) {
+
+      //
+      // If gEfiAdapterInfoMediaStateGuid is not supported, call NetLibDetectMedia to get media state!
+      //
+      MediaPresent = TRUE;
+      Status = NetLibDetectMedia (ServiceHandle, &MediaPresent);
+      if (!EFI_ERROR (Status)) {
+        if (MediaPresent) {
+          *MediaState = EFI_SUCCESS;
+        } else {
+          *MediaState = EFI_NO_MEDIA;
+        }
+      }
+      return Status;
+    }
+
+    return Status;
+  }
+
+  //
+  // Loop to check media state 
+  //
+
+  Timer        = NULL;
+  TimeRemained = Timeout;
+  Status = gBS->CreateEvent (EVT_TIMER, TPL_CALLBACK, NULL, NULL, &Timer);
+  if (EFI_ERROR (Status)) {
+    return EFI_DEVICE_ERROR;
+  }
+
+  do {
+    Status = gBS->SetTimer (
+                    Timer,
+                    TimerRelative,
+                    MEDIA_STATE_DETECT_TIME_INTERVAL
+                    );
+    if (EFI_ERROR (Status)) {
+      gBS->CloseEvent(Timer);
+      return EFI_DEVICE_ERROR;
+    }
+
+    do {
+      TimerStatus = gBS->CheckEvent (Timer);
+      if (!EFI_ERROR (TimerStatus)) {
+
+        TimeRemained -= MEDIA_STATE_DETECT_TIME_INTERVAL;
+        Status = Aip->GetInformation (
+                        Aip,
+                        &gEfiAdapterInfoMediaStateGuid,
+                        (VOID **) &MediaInfo,
+                        &DataSize
+                        );
+        if (!EFI_ERROR (Status)) {
+
+          *MediaState = MediaInfo->MediaState;
+          FreePool (MediaInfo);
+        } else {
+
+          if (MediaInfo != NULL) {
+            FreePool (MediaInfo);
+          }
+          gBS->CloseEvent(Timer);
+          return Status;
+        }
+      }
+    } while (TimerStatus == EFI_NOT_READY);
+  } while (*MediaState == EFI_NOT_READY && TimeRemained >= MEDIA_STATE_DETECT_TIME_INTERVAL);
+
+  gBS->CloseEvent(Timer);
+  if (*MediaState == EFI_NOT_READY && TimeRemained < MEDIA_STATE_DETECT_TIME_INTERVAL) {
+    return EFI_TIMEOUT;
+  } else {
+    return EFI_SUCCESS;
+  }
+}
+
+/**
   Check the default address used by the IPv4 driver is static or dynamic (acquired
   from DHCP).
 
@@ -2551,6 +2808,8 @@ ON_EXIT:
 /**
   Create an IPv4 device path node.
 
+  If Node is NULL, then ASSERT().
+
   The header type of IPv4 device path node is MESSAGING_DEVICE_PATH.
   The header subtype of IPv4 device path node is MSG_IPv4_DP.
   Get other info from parameters to make up the whole IPv4 device path node.
@@ -2578,6 +2837,8 @@ NetLibCreateIPv4DPathNode (
   IN BOOLEAN               UseDefaultAddress
   )
 {
+  ASSERT (Node != NULL);
+
   Node->Header.Type    = MESSAGING_DEVICE_PATH;
   Node->Header.SubType = MSG_IPv4_DP;
   SetDevicePathNodeLength (&Node->Header, sizeof (IPv4_DEVICE_PATH));
@@ -2608,6 +2869,10 @@ NetLibCreateIPv4DPathNode (
 /**
   Create an IPv6 device path node.
 
+  If Node is NULL, then ASSERT().
+  If LocalIp is NULL, then ASSERT().
+  If RemoteIp is NULL, then ASSERT().
+
   The header type of IPv6 device path node is MESSAGING_DEVICE_PATH.
   The header subtype of IPv6 device path node is MSG_IPv6_DP.
   Get other info from parameters to make up the whole IPv6 device path node.
@@ -2633,6 +2898,8 @@ NetLibCreateIPv6DPathNode (
   IN UINT16                Protocol
   )
 {
+  ASSERT (Node != NULL && LocalIp != NULL && RemoteIp != NULL);
+
   Node->Header.Type    = MESSAGING_DEVICE_PATH;
   Node->Header.SubType = MSG_IPv6_DP;
   SetDevicePathNodeLength (&Node->Header, sizeof (IPv6_DEVICE_PATH));
@@ -2656,6 +2923,8 @@ NetLibCreateIPv6DPathNode (
 
 /**
   Find the UNDI/SNP handle from controller and protocol GUID.
+
+  If ProtocolGuid is NULL, then ASSERT().
 
   For example, IP will open a MNP child to transmit/receive
   packets, when MNP is stopped, IP should also be stopped. IP
@@ -2683,6 +2952,8 @@ NetLibGetNicHandle (
   EFI_STATUS                          Status;
   UINTN                               OpenCount;
   UINTN                               Index;
+
+  ASSERT (ProtocolGuid != NULL);
 
   Status = gBS->OpenProtocolInformation (
                   Controller,
@@ -2965,6 +3236,8 @@ NetLibIp6ToStr (
 /**
   This function obtains the system guid from the smbios table.
 
+  If SystemGuid is NULL, then ASSERT().
+
   @param[out]  SystemGuid     The pointer of the returned system guid.
 
   @retval EFI_SUCCESS         Successfully obtained the system guid.
@@ -2983,6 +3256,8 @@ NetLibGetSystemGuid (
   SMBIOS_STRUCTURE_POINTER      Smbios;
   SMBIOS_STRUCTURE_POINTER      SmbiosEnd;
   CHAR8                         *String;
+
+  ASSERT (SystemGuid != NULL);
 
   SmbiosTable = NULL;
   Status = EfiGetSystemConfigurationTable (&gEfiSmbios3TableGuid, (VOID **) &Smbios30Table);
@@ -3050,7 +3325,10 @@ NetLibGetSystemGuid (
 }
 
 /**
-  Create Dns QName according the queried domain name. 
+  Create Dns QName according the queried domain name.
+
+  If DomainName is NULL, then ASSERT().
+  
   QName is a domain name represented as a sequence of labels, 
   where each label consists of a length octet followed by that 
   number of octets. The QName terminates with the zero 
@@ -3075,6 +3353,8 @@ NetLibCreateDnsQName (
   CHAR8                 *Tail;
   UINTN                 Len;
   UINTN                 Index;
+
+  ASSERT (DomainName != NULL);
 
   QueryName     = NULL;
   QueryNameSize = 0;

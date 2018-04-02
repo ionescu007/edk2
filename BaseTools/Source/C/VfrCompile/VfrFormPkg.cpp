@@ -104,8 +104,13 @@ CFormPkg::CFormPkg (
   SBufferNode *Node;
 
   mPkgLength           = 0;
+  mBufferSize          = 0;
   mBufferNodeQueueHead = NULL;
+  mBufferNodeQueueTail = NULL;
   mCurrBufferNode      = NULL;
+  mReadBufferNode      = NULL;
+  mReadBufferOffset    = 0;
+  PendingAssignList    = NULL;
 
   Node = new SBufferNode;
   if (Node == NULL) {
@@ -139,7 +144,7 @@ CFormPkg::~CFormPkg ()
     pBNode = mBufferNodeQueueHead;
     mBufferNodeQueueHead = mBufferNodeQueueHead->mNext;
     if (pBNode->mBufferStart != NULL) {
-      delete pBNode->mBufferStart;
+      delete[] pBNode->mBufferStart;
       delete pBNode;
     }
   }
@@ -839,7 +844,7 @@ CFormPkg::DeclarePendingQuestion (
   // DisableIf
   CIfrDisableIf DIObj;
   DIObj.SetLineNo (LineNo);
-  *InsertOpcodeAddr = DIObj.GetObjBinAddr ();
+  *InsertOpcodeAddr = DIObj.GetObjBinAddr<CHAR8>();
   
   //TrueOpcode
   CIfrTrue TObj (LineNo);
@@ -1147,7 +1152,7 @@ CIfrRecordInfoDB::IfrRecordOutput (
   SIfrRecord *pNode; 
 
   if (TBuffer.Buffer != NULL) {
-    delete TBuffer.Buffer;
+    delete[] TBuffer.Buffer;
   }
 
   TBuffer.Size = 0;
@@ -1920,7 +1925,7 @@ CIfrRecordInfoDB::IfrCreateDefaultForQuestion (
           Obj = new CIfrObj (pOpHead->OpCode, NULL, pSNode->mBinBufLen, FALSE);
           assert (Obj != NULL);
           Obj->SetLineNo (pSNode->mLineNo);
-          ObjBinBuf = Obj->GetObjBinAddr();
+          ObjBinBuf = Obj->GetObjBinAddr<CHAR8>();
           memcpy (ObjBinBuf, pSNode->mIfrBinBuf, (UINTN)pSNode->mBinBufLen);
           delete Obj;
           pSNode = pSNode->mNext;
@@ -2254,7 +2259,7 @@ CIfrObj::_EMIT_PENDING_OBJ (
   // update bin buffer to package data buffer
   //
   if (mObjBinBuf != NULL) {
-    delete mObjBinBuf;
+    delete[] mObjBinBuf;
     mObjBinBuf = ObjBinBuf;
   }
   
@@ -2421,6 +2426,7 @@ CIfrObj::CIfrObj (
   mObjBinLen   = (ObjBinLen == 0) ? gOpcodeSizesScopeTable[OpCode].mSize : ObjBinLen;
   mObjBinBuf   = ((DelayEmit == FALSE) && (gCreateOp == TRUE)) ? gCFormPkg.IfrBinBufferGet (mObjBinLen) : new CHAR8[EFI_IFR_MAX_LENGTH];
   mRecordIdx   = (gCreateOp == TRUE) ? gCIfrRecordInfoDB.IfrRecordRegister (0xFFFFFFFF, mObjBinBuf, mObjBinLen, mPkgOffset) : EFI_IFR_RECORDINFO_IDX_INVALUD;
+  mLineNo      = 0;
 
   assert (mObjBinBuf != NULL);
 

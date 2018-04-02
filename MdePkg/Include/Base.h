@@ -218,6 +218,26 @@ VERIFY_SIZE_OF (__VERIFY_UINT32_ENUM_SIZE, 4);
   #endif
 #endif
 
+///
+/// Tell the code optimizer that the function will return twice.
+/// This prevents wrong optimizations which can cause bugs.
+///
+#ifndef RETURNS_TWICE
+  #if defined (__GNUC__) || defined (__clang__)
+    ///
+    /// Tell the code optimizer that the function will return twice.
+    /// This prevents wrong optimizations which can cause bugs.
+    ///
+    #define RETURNS_TWICE  __attribute__((returns_twice))
+  #else
+    ///
+    /// Tell the code optimizer that the function will return twice.
+    /// This prevents wrong optimizations which can cause bugs.
+    ///
+    #define RETURNS_TWICE
+  #endif
+#endif
+
 //
 // For symbol name in assembly code, an extra "_" is sometimes necessary
 //
@@ -375,6 +395,14 @@ struct _LIST_ENTRY {
 #define MAX_UINT32  ((UINT32)0xFFFFFFFF)
 #define MAX_INT64   ((INT64)0x7FFFFFFFFFFFFFFFULL)
 #define MAX_UINT64  ((UINT64)0xFFFFFFFFFFFFFFFFULL)
+
+///
+/// Minimum values for the signed UEFI Data Types
+///
+#define MIN_INT8   (((INT8)  -127) - 1)
+#define MIN_INT16  (((INT16) -32767) - 1)
+#define MIN_INT32  (((INT32) -2147483647) - 1)
+#define MIN_INT64  (((INT64) -9223372036854775807LL) - 1)
 
 #define  BIT0     0x00000001
 #define  BIT1     0x00000002
@@ -552,21 +580,24 @@ struct _LIST_ENTRY {
 #define  BASE_8EB    0x8000000000000000ULL
 
 //
-//  Support for variable length argument lists using the ANSI standard.
+//  Support for variable argument lists in freestanding edk2 modules.
 //
-//  Since we are using the ANSI standard we used the standard naming and
-//  did not follow the coding convention
+//  For modules that use the ISO C library interfaces for variable
+//  argument lists, refer to "StdLib/Include/stdarg.h".
 //
 //  VA_LIST  - typedef for argument list.
 //  VA_START (VA_LIST Marker, argument before the ...) - Init Marker for use.
 //  VA_END (VA_LIST Marker) - Clear Marker
-//  VA_ARG (VA_LIST Marker, var arg size) - Use Marker to get an argument from
-//    the ... list. You must know the size and pass it in this macro.
+//  VA_ARG (VA_LIST Marker, var arg type) - Use Marker to get an argument from
+//    the ... list. You must know the type and pass it in this macro.  Type
+//    must be compatible with the type of the actual next argument (as promoted
+//    according to the default argument promotions.)
 //  VA_COPY (VA_LIST Dest, VA_LIST Start) - Initialize Dest as a copy of Start.
 //
-//  example:
+//  Example:
 //
 //  UINTN
+//  EFIAPI
 //  ExampleVarArg (
 //    IN UINTN  NumberOfArgs,
 //    ...
@@ -582,14 +613,20 @@ struct _LIST_ENTRY {
 //    VA_START (Marker, NumberOfArgs);
 //    for (Index = 0, Result = 0; Index < NumberOfArgs; Index++) {
 //      //
-//      // The ... list is a series of UINTN values, so average them up.
+//      // The ... list is a series of UINTN values, so sum them up.
 //      //
 //      Result += VA_ARG (Marker, UINTN);
 //    }
 //
 //    VA_END (Marker);
-//    return Result
+//    return Result;
 //  }
+//
+//  Notes:
+//  - Functions that call VA_START() / VA_END() must have a variable
+//    argument list and must be declared EFIAPI.
+//  - Functions that call VA_COPY() / VA_END() must be declared EFIAPI.
+//  - Functions that only use VA_LIST and VA_ARG() need not be EFIAPI.
 //
 
 /**
@@ -630,6 +667,18 @@ struct _LIST_ENTRY {
 #endif
 
 #define VA_COPY(Dest, Start)          __va_copy (Dest, Start)
+
+#elif defined(_M_ARM) || defined(_M_ARM64)
+//
+// MSFT ARM variable argument list support.
+//
+
+typedef char* VA_LIST;
+
+#define VA_START(Marker, Parameter)     __va_start (&Marker, &Parameter, _INT_SIZE_OF (Parameter), __alignof(Parameter), &Parameter)
+#define VA_ARG(Marker, TYPE)            (*(TYPE *) ((Marker += _INT_SIZE_OF (TYPE) + ((-(INTN)Marker) & (sizeof(TYPE) - 1))) - _INT_SIZE_OF (TYPE)))
+#define VA_END(Marker)                  (Marker = (VA_LIST) 0)
+#define VA_COPY(Dest, Start)            ((void)((Dest) = (Start)))
 
 #elif defined(__GNUC__)
 

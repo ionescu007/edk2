@@ -4,7 +4,7 @@
   This module will execute the boot script saved during last boot and after that,
   control is passed to OS waking up handler.
 
-  Copyright (c) 2006 - 2017, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2006 - 2018, Intel Corporation. All rights reserved.<BR>
   Copyright (c) 2017, AMD Incorporated. All rights reserved.<BR>
 
   This program and the accompanying materials
@@ -22,12 +22,15 @@
 
 #include <Guid/AcpiS3Context.h>
 #include <Guid/BootScriptExecutorVariable.h>
-#include <Guid/Performance.h>
+#include <Guid/ExtendedFirmwarePerformance.h>
+#include <Guid/EndOfS3Resume.h>
+#include <Guid/S3SmmInitDone.h>
 #include <Ppi/ReadOnlyVariable2.h>
 #include <Ppi/S3Resume2.h>
 #include <Ppi/SmmAccess.h>
 #include <Ppi/PostBootScriptTable.h>
 #include <Ppi/EndOfPeiPhase.h>
+#include <Ppi/SmmCommunication.h>
 
 #include <Library/DebugLib.h>
 #include <Library/BaseLib.h>
@@ -151,6 +154,22 @@ typedef union {
   UINT64    Uint64;
 } PAGE_TABLE_1G_ENTRY;
 
+//
+// Define two type of smm communicate headers.
+// One for 32 bits PEI + 64 bits DXE, the other for 32 bits PEI + 32 bits DXE case.
+//
+typedef struct {
+  EFI_GUID  HeaderGuid;
+  UINT32    MessageLength;
+  UINT8     Data[1];
+} SMM_COMMUNICATE_HEADER_32;
+
+typedef struct {
+  EFI_GUID  HeaderGuid;
+  UINT64    MessageLength;
+  UINT8     Data[1];
+} SMM_COMMUNICATE_HEADER_64;
+
 #pragma pack()
 
 //
@@ -241,6 +260,12 @@ EFI_PEI_PPI_DESCRIPTOR mPpiListEndOfPeiTable = {
   0
 };
 
+EFI_PEI_PPI_DESCRIPTOR mPpiListS3SmmInitDoneTable = {
+  (EFI_PEI_PPI_DESCRIPTOR_PPI | EFI_PEI_PPI_DESCRIPTOR_TERMINATE_LIST),
+  &gEdkiiS3SmmInitDoneGuid,
+  0
+};
+
 //
 // Global Descriptor Table (GDT)
 //
@@ -267,132 +292,6 @@ GLOBAL_REMOVE_IF_UNREFERENCED CONST IA32_DESCRIPTOR mGdt = {
   (UINTN) mGdtEntries
   };
 
-/**
-  Performance measure function to get S3 detailed performance data.
-
-  This function will getS3 detailed performance data and saved in pre-reserved ACPI memory.
-**/
-VOID
-WriteToOsS3PerformanceData (
-  VOID
-  )
-{
-  EFI_STATUS                                    Status;
-  EFI_PHYSICAL_ADDRESS                          mAcpiLowMemoryBase;
-  PERF_HEADER                                   *PerfHeader;
-  PERF_DATA                                     *PerfData;
-  UINT64                                        Ticker;
-  UINTN                                         Index;
-  EFI_PEI_READ_ONLY_VARIABLE2_PPI               *VariableServices;
-  UINTN                                         VarSize;
-  UINTN                                         LogEntryKey;
-  CONST VOID                                    *Handle;
-  CONST CHAR8                                   *Token;
-  CONST CHAR8                                   *Module;
-  UINT64                                        StartTicker;
-  UINT64                                        EndTicker;
-  UINT64                                        StartValue;
-  UINT64                                        EndValue;
-  BOOLEAN                                       CountUp;
-  UINT64                                        Freq;
-
-  //
-  // Retrieve time stamp count as early as possible
-  //
-  Ticker = GetPerformanceCounter ();
-
-  Freq   = GetPerformanceCounterProperties (&StartValue, &EndValue);
-
-  Freq   = DivU64x32 (Freq, 1000);
-
-  Status = PeiServicesLocatePpi (
-             &gEfiPeiReadOnlyVariable2PpiGuid,
-             0,
-             NULL,
-             (VOID **) &VariableServices
-             );
-  if (EFI_ERROR (Status)) {
-    return;
-  }
-
-  VarSize   = sizeof (EFI_PHYSICAL_ADDRESS);
-  Status = VariableServices->GetVariable (
-                               VariableServices,
-                               L"PerfDataMemAddr",
-                               &gPerformanceProtocolGuid,
-                               NULL,
-                               &VarSize,
-                               &mAcpiLowMemoryBase
-                               );
-  if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "Fail to retrieve variable to log S3 performance data \n"));
-    return;
-  }
-
-  PerfHeader = (PERF_HEADER *) (UINTN) mAcpiLowMemoryBase;
-
-  if (PerfHeader->Signiture != PERFORMANCE_SIGNATURE) {
-    DEBUG ((EFI_D_ERROR, "Performance data in ACPI memory get corrupted! \n"));
-    return;
-  }
-
-  //
-  // Record total S3 resume time.
-  //
-  if (EndValue >= StartValue) {
-    PerfHeader->S3Resume = Ticker - StartValue;
-    CountUp              = TRUE;
-  } else {
-    PerfHeader->S3Resume = StartValue - Ticker;
-    CountUp              = FALSE;
-  }
-
-  //
-  // Get S3 detailed performance data
-  //
-  Index = 0;
-  LogEntryKey = 0;
-  while ((LogEntryKey = GetPerformanceMeasurement (
-                          LogEntryKey,
-                          &Handle,
-                          &Token,
-                          &Module,
-                          &StartTicker,
-                          &EndTicker)) != 0) {
-    if (EndTicker != 0) {
-      PerfData = &PerfHeader->S3Entry[Index];
-
-      //
-      // Use File Handle to specify the different performance log for PEIM.
-      // File Handle is the base address of PEIM FFS file.
-      //
-      if ((AsciiStrnCmp (Token, "PEIM", PEI_PERFORMANCE_STRING_SIZE) == 0) && (Handle != NULL)) {
-        AsciiSPrint (PerfData->Token, PERF_TOKEN_LENGTH, "0x%11p", Handle);
-      } else {
-        AsciiStrnCpyS (PerfData->Token, PERF_TOKEN_SIZE, Token, PERF_TOKEN_LENGTH);
-      }
-      if (StartTicker == 1) {
-        StartTicker = StartValue;
-      }
-      if (EndTicker == 1) {
-        EndTicker = StartValue;
-      }
-      Ticker = CountUp? (EndTicker - StartTicker) : (StartTicker - EndTicker);
-      PerfData->Duration = (UINT32) DivU64x32 (Ticker, (UINT32) Freq);
-
-      //
-      // Only Record > 1ms performance data so that more big performance can be recorded.
-      //
-      if ((Ticker > Freq) && (++Index >= PERF_PEI_ENTRY_MAX_NUM)) {
-        //
-        // Reach the maximum number of PEI performance log entries.
-        //
-        break;
-      }
-    }
-  }
-  PerfHeader->S3EntryNum = (UINT32) Index;
-}
 
 /**
   The function will check if current waking vector is long mode.
@@ -427,6 +326,67 @@ IsLongModeWakingVector (
     }
   }
   return FALSE;
+}
+
+/**
+  Signal to SMM through communication buffer way.
+
+  @param[in]  HandlerType       SMI handler type to be signaled.
+
+**/
+VOID
+SignalToSmmByCommunication (
+  IN EFI_GUID   *HandlerType
+  )
+{
+  EFI_STATUS                         Status;
+  EFI_PEI_SMM_COMMUNICATION_PPI      *SmmCommunicationPpi;
+  UINTN                              CommSize;
+  SMM_COMMUNICATE_HEADER_32          Header32;
+  SMM_COMMUNICATE_HEADER_64          Header64;
+  VOID                               *CommBuffer;
+
+  DEBUG ((DEBUG_INFO, "Signal %g to SMM - Enter\n", HandlerType));
+
+  //
+  // This buffer consumed in DXE phase, so base on DXE mode to prepare communicate buffer.
+  // Detect whether DXE is 64 bits mode.
+  // if (sizeof(UINTN) == sizeof(UINT64), PEI already 64 bits, assume DXE also 64 bits.
+  // or (FeaturePcdGet (PcdDxeIplSwitchToLongMode)), DXE will switch to 64 bits.
+  //
+  if ((sizeof(UINTN) == sizeof(UINT64)) || (FeaturePcdGet (PcdDxeIplSwitchToLongMode))) {
+    CommBuffer = &Header64;
+    Header64.MessageLength = 0;
+    CommSize = OFFSET_OF (SMM_COMMUNICATE_HEADER_64, Data);
+  } else {
+    CommBuffer = &Header32;
+    Header32.MessageLength = 0;
+    CommSize = OFFSET_OF (SMM_COMMUNICATE_HEADER_32, Data);
+  }
+  CopyGuid (CommBuffer, HandlerType);
+
+  Status = PeiServicesLocatePpi (
+             &gEfiPeiSmmCommunicationPpiGuid,
+             0,
+             NULL,
+             (VOID **)&SmmCommunicationPpi
+             );
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_ERROR, "Locate Smm Communicate Ppi failed (%r)!\n", Status));
+    return;
+  }
+
+  Status = SmmCommunicationPpi->Communicate (
+                                  SmmCommunicationPpi,
+                                  (VOID *)CommBuffer,
+                                  &CommSize
+                                  );
+  if (EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_ERROR, "SmmCommunicationPpi->Communicate return failure (%r)!\n", Status));
+  }
+
+  DEBUG ((DEBUG_INFO, "Signal %g to SMM - Exit (%r)\n", HandlerType, Status));
+  return;
 }
 
 /**
@@ -475,8 +435,12 @@ S3ResumeBootOs (
   //
   // Install BootScriptDonePpi
   //
+  PERF_START_EX (NULL, "BootScriptDonePpi", NULL, 0, PERF_INMODULE_START_ID);
+
   Status = PeiServicesInstallPpi (&mPpiListPostScriptTable);
   ASSERT_EFI_ERROR (Status);
+
+  PERF_END_EX (NULL, "BootScriptDonePpi", NULL, 0, PERF_INMODULE_END_ID);
 
   //
   // Get ACPI Table Address
@@ -500,17 +464,27 @@ S3ResumeBootOs (
   //
   // Install EndOfPeiPpi
   //
+  PERF_START_EX (NULL, "EndOfPeiPpi", NULL, 0, PERF_INMODULE_START_ID);
+
   Status = PeiServicesInstallPpi (&mPpiListEndOfPeiTable);
   ASSERT_EFI_ERROR (Status);
+
+  PERF_END_EX (NULL, "EndOfPeiPpi", NULL, 0, PERF_INMODULE_END_ID);
+
+  PERF_START_EX (NULL, "EndOfS3Resume", NULL, 0, PERF_INMODULE_START_ID);
+
+  DEBUG ((DEBUG_INFO, "Signal EndOfS3Resume\n"));
+  //
+  // Signal EndOfS3Resume to SMM.
+  //
+  SignalToSmmByCommunication (&gEdkiiEndOfS3ResumeGuid);
+
+  PERF_END_EX (NULL, "EndOfS3Resume", NULL, 0, PERF_INMODULE_END_ID);
 
   //
   // report status code on S3 resume
   //
   REPORT_STATUS_CODE (EFI_PROGRESS_CODE, EFI_SOFTWARE_PEI_MODULE | EFI_SW_PEI_PC_OS_WAKE);
-
-  PERF_CODE (
-    WriteToOsS3PerformanceData ();
-    );
 
   AsmTransferControl = (ASM_TRANSFER_CONTROL)(UINTN)PeiS3ResumeState->AsmTransferControl;
   if (Facs->XFirmwareWakingVector != 0) {
@@ -822,6 +796,17 @@ S3ResumeExecuteBootScript (
         Status = SmmAccess->Lock ((EFI_PEI_SERVICES **)GetPeiServicesTablePointer (), SmmAccess, Index);
       }
     }
+
+    DEBUG ((DEBUG_INFO, "Signal S3SmmInitDone\n"));
+    //
+    // Install S3SmmInitDone PPI.
+    //
+    Status = PeiServicesInstallPpi (&mPpiListS3SmmInitDoneTable);
+    ASSERT_EFI_ERROR (Status);
+    //
+    // Signal S3SmmInitDone to SMM.
+    //
+    SignalToSmmByCommunication (&gEdkiiS3SmmInitDoneGuid);
   }
 
   if (FeaturePcdGet (PcdDxeIplSwitchToLongMode)) {

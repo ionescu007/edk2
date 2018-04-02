@@ -1,7 +1,7 @@
 ## @file
 # process FV generation
 #
-#  Copyright (c) 2007 - 2017, Intel Corporation. All rights reserved.<BR>
+#  Copyright (c) 2007 - 2018, Intel Corporation. All rights reserved.<BR>
 #
 #  This program and the accompanying materials
 #  are licensed and made available under the terms and conditions of the BSD License
@@ -22,6 +22,7 @@ from struct import *
 
 import Ffs
 import AprioriSection
+import FfsFileStatement
 from GenFdsGlobalVariable import GenFdsGlobalVariable
 from GenFds import GenFds
 from CommonDataClass.FdfClass import FvClassObject
@@ -51,6 +52,7 @@ class FV (FvClassObject):
         self.FvBaseAddress = None
         self.FvForceRebase = None
         self.FvRegionInFD = None
+        self.UsedSizeEnable = False
         
     ## AddToBuffer()
     #
@@ -66,16 +68,16 @@ class FV (FvClassObject):
     #   @param  MacroDict   macro value pair
     #   @retval string      Generated FV file path
     #
-    def AddToBuffer (self, Buffer, BaseAddress=None, BlockSize= None, BlockNum=None, ErasePloarity='1', VtfDict=None, MacroDict = {}) :
+    def AddToBuffer (self, Buffer, BaseAddress=None, BlockSize= None, BlockNum=None, ErasePloarity='1', VtfDict=None, MacroDict = {}, Flag=False) :
 
-        if BaseAddress == None and self.UiFvName.upper() + 'fv' in GenFds.ImageBinDict.keys():
+        if BaseAddress is None and self.UiFvName.upper() + 'fv' in GenFds.ImageBinDict.keys():
             return GenFds.ImageBinDict[self.UiFvName.upper() + 'fv']
         
         #
         # Check whether FV in Capsule is in FD flash region.
         # If yes, return error. Doesn't support FV in Capsule image is also in FD flash region.
         #
-        if self.CapsuleName != None:
+        if self.CapsuleName is not None:
             for FdName in GenFdsGlobalVariable.FdfParser.Profile.FdDict.keys():
                 FdObj = GenFdsGlobalVariable.FdfParser.Profile.FdDict[FdName]
                 for RegionObj in FdObj.RegionList:
@@ -87,15 +89,15 @@ class FV (FvClassObject):
                                 continue
                             elif self.UiFvName.upper() == RegionData.upper():
                                 GenFdsGlobalVariable.ErrorLogger("Capsule %s in FD region can't contain a FV %s in FD region." % (self.CapsuleName, self.UiFvName.upper()))
-
-        GenFdsGlobalVariable.InfLogger( "\nGenerating %s FV" %self.UiFvName)
+        if not Flag:
+            GenFdsGlobalVariable.InfLogger( "\nGenerating %s FV" %self.UiFvName)
         GenFdsGlobalVariable.LargeFileInFvFlags.append(False)
         FFSGuid = None
         
-        if self.FvBaseAddress != None:
+        if self.FvBaseAddress is not None:
             BaseAddress = self.FvBaseAddress
-
-        self.__InitializeInf__(BaseAddress, BlockSize, BlockNum, ErasePloarity, VtfDict)
+        if not Flag:
+            self.__InitializeInf__(BaseAddress, BlockSize, BlockNum, ErasePloarity, VtfDict)
         #
         # First Process the Apriori section
         #
@@ -104,114 +106,124 @@ class FV (FvClassObject):
         GenFdsGlobalVariable.VerboseLogger('First generate Apriori file !')
         FfsFileList = []
         for AprSection in self.AprioriSectionList:
-            FileName = AprSection.GenFfs (self.UiFvName, MacroDict)
+            FileName = AprSection.GenFfs (self.UiFvName, MacroDict, IsMakefile=Flag)
             FfsFileList.append(FileName)
             # Add Apriori file name to Inf file
-            self.FvInfFile.writelines("EFI_FILE_NAME = " + \
-                                       FileName          + \
-                                           T_CHAR_LF)
+            if not Flag:
+                self.FvInfFile.writelines("EFI_FILE_NAME = " + \
+                                            FileName          + \
+                                            T_CHAR_LF)
 
         # Process Modules in FfsList
         for FfsFile in self.FfsList :
-            FileName = FfsFile.GenFfs(MacroDict, FvParentAddr=BaseAddress)
+            if Flag:
+                if isinstance(FfsFile, FfsFileStatement.FileStatement):
+                    continue
+            if GenFdsGlobalVariable.EnableGenfdsMultiThread and GenFdsGlobalVariable.ModuleFile and GenFdsGlobalVariable.ModuleFile.Path.find(os.path.normpath(FfsFile.InfFileName)) == -1:
+                continue
+            FileName = FfsFile.GenFfs(MacroDict, FvParentAddr=BaseAddress, IsMakefile=Flag, FvName=self.UiFvName)
             FfsFileList.append(FileName)
-            self.FvInfFile.writelines("EFI_FILE_NAME = " + \
-                                       FileName          + \
-                                       T_CHAR_LF)
-
-        SaveFileOnChange(self.InfFileName, self.FvInfFile.getvalue(), False)
-        self.FvInfFile.close()
+            if not Flag:
+                self.FvInfFile.writelines("EFI_FILE_NAME = " + \
+                                            FileName          + \
+                                            T_CHAR_LF)
+        if not Flag:
+            SaveFileOnChange(self.InfFileName, self.FvInfFile.getvalue(), False)
+            self.FvInfFile.close()
         #
         # Call GenFv tool
         #
         FvOutputFile = os.path.join(GenFdsGlobalVariable.FvDir, self.UiFvName)
         FvOutputFile = FvOutputFile + '.Fv'
         # BUGBUG: FvOutputFile could be specified from FDF file (FV section, CreateFile statement)
-        if self.CreateFileName != None:
+        if self.CreateFileName is not None:
             FvOutputFile = self.CreateFileName
 
-        FvInfoFileName = os.path.join(GenFdsGlobalVariable.FfsDir, self.UiFvName + '.inf')
-        CopyLongFilePath(GenFdsGlobalVariable.FvAddressFileName, FvInfoFileName)
-        OrigFvInfo = None
-        if os.path.exists (FvInfoFileName):
-            OrigFvInfo = open(FvInfoFileName, 'r').read()
-        if GenFdsGlobalVariable.LargeFileInFvFlags[-1]:
-            FFSGuid = GenFdsGlobalVariable.EFI_FIRMWARE_FILE_SYSTEM3_GUID;
-        GenFdsGlobalVariable.GenerateFirmwareVolume(
-                                FvOutputFile,
-                                [self.InfFileName],
-                                AddressFile=FvInfoFileName,
-                                FfsList=FfsFileList,
-                                ForceRebase=self.FvForceRebase,
-                                FileSystemGuid=FFSGuid
-                                )
-
-        NewFvInfo = None
-        if os.path.exists (FvInfoFileName):
-            NewFvInfo = open(FvInfoFileName, 'r').read()
-        if NewFvInfo != None and NewFvInfo != OrigFvInfo:
-            FvChildAddr = []
-            AddFileObj = open(FvInfoFileName, 'r')
-            AddrStrings = AddFileObj.readlines()
-            AddrKeyFound = False
-            for AddrString in AddrStrings:
-                if AddrKeyFound:
-                    #get base address for the inside FvImage
-                    FvChildAddr.append (AddrString)
-                elif AddrString.find ("[FV_BASE_ADDRESS]") != -1:
-                    AddrKeyFound = True
-            AddFileObj.close()
-
-            if FvChildAddr != []:
-                # Update Ffs again
-                for FfsFile in self.FfsList :
-                    FileName = FfsFile.GenFfs(MacroDict, FvChildAddr, BaseAddress)
-                
-                if GenFdsGlobalVariable.LargeFileInFvFlags[-1]:
-                    FFSGuid = GenFdsGlobalVariable.EFI_FIRMWARE_FILE_SYSTEM3_GUID;
-                #Update GenFv again
-                GenFdsGlobalVariable.GenerateFirmwareVolume(
-                                        FvOutputFile,
-                                        [self.InfFileName],
-                                        AddressFile=FvInfoFileName,
-                                        FfsList=FfsFileList,
-                                        ForceRebase=self.FvForceRebase,
-                                        FileSystemGuid=FFSGuid
-                                        )
-
-        #
-        # Write the Fv contents to Buffer
-        #
-        if os.path.isfile(FvOutputFile):
-            FvFileObj = open ( FvOutputFile,'rb')
-
-            GenFdsGlobalVariable.VerboseLogger( "\nGenerate %s FV Successfully" %self.UiFvName)
-            GenFdsGlobalVariable.SharpCounter = 0
-
-            Buffer.write(FvFileObj.read())
-            FvFileObj.seek(0)
-            # PI FvHeader is 0x48 byte
-            FvHeaderBuffer = FvFileObj.read(0x48)
-            # FV alignment position.
-            FvAlignmentValue = 1 << (ord (FvHeaderBuffer[0x2E]) & 0x1F)
-            # FvAlignmentValue is larger than or equal to 1K
-            if FvAlignmentValue >= 0x400:
-                if FvAlignmentValue >= 0x100000:
-                    #The max alignment supported by FFS is 16M.
-                    if FvAlignmentValue >= 0x1000000:
-                        self.FvAlignment = "16M"
-                    else:
-                        self.FvAlignment = str(FvAlignmentValue / 0x100000) + "M"
-                else:
-                    self.FvAlignment = str (FvAlignmentValue / 0x400) + "K"
-            else:
-                # FvAlignmentValue is less than 1K
-                self.FvAlignment = str (FvAlignmentValue)
-            FvFileObj.close()
+        if Flag:
             GenFds.ImageBinDict[self.UiFvName.upper() + 'fv'] = FvOutputFile
-            GenFdsGlobalVariable.LargeFileInFvFlags.pop()
-        else:
-            GenFdsGlobalVariable.ErrorLogger("Failed to generate %s FV file." %self.UiFvName)
+            return FvOutputFile
+
+        FvInfoFileName = os.path.join(GenFdsGlobalVariable.FfsDir, self.UiFvName + '.inf')
+        if not Flag:
+            CopyLongFilePath(GenFdsGlobalVariable.FvAddressFileName, FvInfoFileName)
+            OrigFvInfo = None
+            if os.path.exists (FvInfoFileName):
+                OrigFvInfo = open(FvInfoFileName, 'r').read()
+            if GenFdsGlobalVariable.LargeFileInFvFlags[-1]:
+                FFSGuid = GenFdsGlobalVariable.EFI_FIRMWARE_FILE_SYSTEM3_GUID
+            GenFdsGlobalVariable.GenerateFirmwareVolume(
+                                    FvOutputFile,
+                                    [self.InfFileName],
+                                    AddressFile=FvInfoFileName,
+                                    FfsList=FfsFileList,
+                                    ForceRebase=self.FvForceRebase,
+                                    FileSystemGuid=FFSGuid
+                                    )
+
+            NewFvInfo = None
+            if os.path.exists (FvInfoFileName):
+                NewFvInfo = open(FvInfoFileName, 'r').read()
+            if NewFvInfo is not None and NewFvInfo != OrigFvInfo:
+                FvChildAddr = []
+                AddFileObj = open(FvInfoFileName, 'r')
+                AddrStrings = AddFileObj.readlines()
+                AddrKeyFound = False
+                for AddrString in AddrStrings:
+                    if AddrKeyFound:
+                        #get base address for the inside FvImage
+                        FvChildAddr.append (AddrString)
+                    elif AddrString.find ("[FV_BASE_ADDRESS]") != -1:
+                        AddrKeyFound = True
+                AddFileObj.close()
+
+                if FvChildAddr != []:
+                    # Update Ffs again
+                    for FfsFile in self.FfsList :
+                        FileName = FfsFile.GenFfs(MacroDict, FvChildAddr, BaseAddress, IsMakefile=Flag, FvName=self.UiFvName)
+
+                    if GenFdsGlobalVariable.LargeFileInFvFlags[-1]:
+                        FFSGuid = GenFdsGlobalVariable.EFI_FIRMWARE_FILE_SYSTEM3_GUID;
+                    #Update GenFv again
+                    GenFdsGlobalVariable.GenerateFirmwareVolume(
+                                                FvOutputFile,
+                                                [self.InfFileName],
+                                                AddressFile=FvInfoFileName,
+                                                FfsList=FfsFileList,
+                                                ForceRebase=self.FvForceRebase,
+                                                FileSystemGuid=FFSGuid
+                                                )
+
+            #
+            # Write the Fv contents to Buffer
+            #
+            if os.path.isfile(FvOutputFile):
+                FvFileObj = open(FvOutputFile, 'rb')
+                GenFdsGlobalVariable.VerboseLogger("\nGenerate %s FV Successfully" % self.UiFvName)
+                GenFdsGlobalVariable.SharpCounter = 0
+
+                Buffer.write(FvFileObj.read())
+                FvFileObj.seek(0)
+                # PI FvHeader is 0x48 byte
+                FvHeaderBuffer = FvFileObj.read(0x48)
+                # FV alignment position.
+                FvAlignmentValue = 1 << (ord(FvHeaderBuffer[0x2E]) & 0x1F)
+                if FvAlignmentValue >= 0x400:
+                    if FvAlignmentValue >= 0x100000:
+                        if FvAlignmentValue >= 0x1000000:
+                        #The max alignment supported by FFS is 16M.
+                            self.FvAlignment = "16M"
+                        else:
+                            self.FvAlignment = str(FvAlignmentValue / 0x100000) + "M"
+                    else:
+                        self.FvAlignment = str(FvAlignmentValue / 0x400) + "K"
+                else:
+                    # FvAlignmentValue is less than 1K
+                    self.FvAlignment = str (FvAlignmentValue)
+                FvFileObj.close()
+                GenFds.ImageBinDict[self.UiFvName.upper() + 'fv'] = FvOutputFile
+                GenFdsGlobalVariable.LargeFileInFvFlags.pop()
+            else:
+                GenFdsGlobalVariable.ErrorLogger("Failed to generate %s FV file." %self.UiFvName)
         return FvOutputFile
 
     ## _GetBlockSize()
@@ -261,16 +273,16 @@ class FV (FvClassObject):
         # Add [Options]
         #
         self.FvInfFile.writelines("[options]" + T_CHAR_LF)
-        if BaseAddress != None :
+        if BaseAddress is not None :
             self.FvInfFile.writelines("EFI_BASE_ADDRESS = " + \
                                        BaseAddress          + \
                                        T_CHAR_LF)
 
-        if BlockSize != None:
+        if BlockSize is not None:
             self.FvInfFile.writelines("EFI_BLOCK_SIZE = " + \
                                       '0x%X' %BlockSize    + \
                                       T_CHAR_LF)
-            if BlockNum != None:
+            if BlockNum is not None:
                 self.FvInfFile.writelines("EFI_NUM_BLOCKS   = "  + \
                                       ' 0x%X' %BlockNum    + \
                                       T_CHAR_LF)
@@ -281,20 +293,20 @@ class FV (FvClassObject):
                     self.FvInfFile.writelines("EFI_BLOCK_SIZE  = 0x1" + T_CHAR_LF)
             
             for BlockSize in self.BlockSizeList :
-                if BlockSize[0] != None:
+                if BlockSize[0] is not None:
                     self.FvInfFile.writelines("EFI_BLOCK_SIZE  = "  + \
                                           '0x%X' %BlockSize[0]    + \
                                           T_CHAR_LF)
 
-                if BlockSize[1] != None:
+                if BlockSize[1] is not None:
                     self.FvInfFile.writelines("EFI_NUM_BLOCKS   = "  + \
                                           ' 0x%X' %BlockSize[1]    + \
                                           T_CHAR_LF)
 
-        if self.BsBaseAddress != None:
+        if self.BsBaseAddress is not None:
             self.FvInfFile.writelines('EFI_BOOT_DRIVER_BASE_ADDRESS = ' + \
                                        '0x%X' %self.BsBaseAddress)
-        if self.RtBaseAddress != None:
+        if self.RtBaseAddress is not None:
             self.FvInfFile.writelines('EFI_RUNTIME_DRIVER_BASE_ADDRESS = ' + \
                                       '0x%X' %self.RtBaseAddress)
         #
@@ -305,14 +317,18 @@ class FV (FvClassObject):
         self.FvInfFile.writelines("EFI_ERASE_POLARITY   = "       + \
                                           ' %s' %ErasePloarity    + \
                                           T_CHAR_LF)
-        if not (self.FvAttributeDict == None):
+        if not (self.FvAttributeDict is None):
             for FvAttribute in self.FvAttributeDict.keys() :
+                if FvAttribute == "FvUsedSizeEnable":
+                    if self.FvAttributeDict[FvAttribute].upper() in ('TRUE', '1') :
+                        self.UsedSizeEnable = True
+                    continue
                 self.FvInfFile.writelines("EFI_"            + \
                                           FvAttribute       + \
                                           ' = '             + \
                                           self.FvAttributeDict[FvAttribute] + \
                                           T_CHAR_LF )
-        if self.FvAlignment != None:
+        if self.FvAlignment is not None:
             self.FvInfFile.writelines("EFI_FVB2_ALIGNMENT_"     + \
                                        self.FvAlignment.strip() + \
                                        " = TRUE"                + \
@@ -321,13 +337,23 @@ class FV (FvClassObject):
         #
         # Generate FV extension header file
         #
-        if self.FvNameGuid == None or self.FvNameGuid == '':
-            if len(self.FvExtEntryType) > 0:
+        if self.FvNameGuid is None or self.FvNameGuid == '':
+            if len(self.FvExtEntryType) > 0 or self.UsedSizeEnable:
                 GenFdsGlobalVariable.ErrorLogger("FV Extension Header Entries declared for %s with no FvNameGuid declaration." % (self.UiFvName))
         
         if self.FvNameGuid <> None and self.FvNameGuid <> '':
             TotalSize = 16 + 4
             Buffer = ''
+            if self.UsedSizeEnable:
+                TotalSize += (4 + 4)
+                ## define EFI_FV_EXT_TYPE_USED_SIZE_TYPE 0x03
+                #typedef  struct
+                # {
+                #    EFI_FIRMWARE_VOLUME_EXT_ENTRY Hdr;
+                #    UINT32 UsedSize;
+                # } EFI_FIRMWARE_VOLUME_EXT_ENTRY_USED_SIZE_TYPE;
+                Buffer += pack('HHL', 8, 3, 0)
+
             if self.FvNameString == 'TRUE':
                 #
                 # Create EXT entry for FV UI name
@@ -416,7 +442,7 @@ class FV (FvClassObject):
         # Add [Files]
         #
         self.FvInfFile.writelines("[files]" + T_CHAR_LF)
-        if VtfDict != None and self.UiFvName in VtfDict.keys():
+        if VtfDict is not None and self.UiFvName in VtfDict.keys():
             self.FvInfFile.writelines("EFI_FILE_NAME = "                   + \
                                        VtfDict.get(self.UiFvName)          + \
                                        T_CHAR_LF)

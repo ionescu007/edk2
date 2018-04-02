@@ -16,7 +16,7 @@
 [Defines]
   PLATFORM_NAME                  = UefiCpu
   PLATFORM_GUID                  = a1b7be22-78b3-4260-9569-8649e8c17d49
-  PLATFORM_VERSION               = 0.80
+  PLATFORM_VERSION               = 0.90
   DSC_SPECIFICATION              = 0x00010005
   OUTPUT_DIRECTORY               = Build/UefiCpu
   SUPPORTED_ARCHITECTURES        = IA32|IPF|X64
@@ -61,7 +61,6 @@
   SmmCpuFeaturesLib|UefiCpuPkg/Library/SmmCpuFeaturesLib/SmmCpuFeaturesLib.inf
   PeCoffGetEntryPointLib|MdePkg/Library/BasePeCoffGetEntryPointLib/BasePeCoffGetEntryPointLib.inf
   PeCoffExtraActionLib|MdePkg/Library/BasePeCoffExtraActionLibNull/BasePeCoffExtraActionLibNull.inf
-  MicrocodeFlashAccessLib|UefiCpuPkg/Feature/Capsule/Library/MicrocodeFlashAccessLibNull/MicrocodeFlashAccessLibNull.inf
   TpmMeasurementLib|MdeModulePkg/Library/TpmMeasurementLibNull/TpmMeasurementLibNull.inf
 
 [LibraryClasses.common.SEC]
@@ -152,7 +151,6 @@
       SmmCpuFeaturesLib|UefiCpuPkg/Library/SmmCpuFeaturesLib/SmmCpuFeaturesLibStm.inf
   }
   UefiCpuPkg/Universal/Acpi/S3Resume2Pei/S3Resume2Pei.inf
-  UefiCpuPkg/Feature/Capsule/MicrocodeUpdateDxe/MicrocodeUpdateDxe.inf
 
 [BuildOptions]
   *_*_*_CC_FLAGS = -D DISABLE_NEW_DEPRECATED_INTERFACES

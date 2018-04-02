@@ -2,7 +2,7 @@
   The internal header file includes the common header files, defines
   internal structure and functions used by SmmCore module.
 
-  Copyright (c) 2009 - 2017, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2009 - 2018, Intel Corporation. All rights reserved.<BR>
   This program and the accompanying materials are licensed and made available 
   under the terms and conditions of the BSD License which accompanies this 
   distribution.  The full text of the license may be found at        
@@ -32,6 +32,8 @@
 #include <Protocol/SmmExitBootServices.h>
 #include <Protocol/SmmLegacyBoot.h>
 #include <Protocol/SmmReadyToBoot.h>
+#include <Protocol/SmmMemoryAttribute.h>
+#include <Protocol/SmmSxDispatch2.h>
 
 #include <Guid/Apriori.h>
 #include <Guid/EventGroup.h>
@@ -39,6 +41,8 @@
 #include <Guid/MemoryProfile.h>
 #include <Guid/LoadModuleAtFixedAddress.h>
 #include <Guid/SmiHandlerProfile.h>
+#include <Guid/EndOfS3Resume.h>
+#include <Guid/S3SmmInitDone.h>
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -59,6 +63,7 @@
 #include <Library/SmmMemLib.h>
 
 #include "PiSmmCorePrivateData.h"
+#include "HeapGuard.h"
 
 //
 // Used to build a table of SMI Handlers that the SMM Core registers
@@ -317,6 +322,7 @@ SmmAllocatePages (
   @param  NumberOfPages          The number of pages to allocate
   @param  Memory                 A pointer to receive the base allocated memory
                                  address
+  @param  NeedGuard              Flag to indicate Guard page is needed or not
 
   @retval EFI_INVALID_PARAMETER  Parameters violate checking rules defined in spec.
   @retval EFI_NOT_FOUND          Could not allocate pages match the requirement.
@@ -330,7 +336,8 @@ SmmInternalAllocatePages (
   IN      EFI_ALLOCATE_TYPE         Type,
   IN      EFI_MEMORY_TYPE           MemoryType,
   IN      UINTN                     NumberOfPages,
-  OUT     EFI_PHYSICAL_ADDRESS      *Memory
+  OUT     EFI_PHYSICAL_ADDRESS      *Memory,
+  IN      BOOLEAN                   NeedGuard
   );
 
 /**
@@ -356,6 +363,8 @@ SmmFreePages (
 
   @param  Memory                 Base address of memory being freed
   @param  NumberOfPages          The number of pages to free
+  @param  IsGuarded              Flag to indicate if the memory is guarded
+                                 or not
 
   @retval EFI_NOT_FOUND          Could not find the entry that covers the range
   @retval EFI_INVALID_PARAMETER  Address not aligned, Address is zero or NumberOfPages is zero.
@@ -366,7 +375,8 @@ EFI_STATUS
 EFIAPI
 SmmInternalFreePages (
   IN      EFI_PHYSICAL_ADDRESS      Memory,
-  IN      UINTN                     NumberOfPages
+  IN      UINTN                     NumberOfPages,
+  IN      BOOLEAN                   IsGuarded
   );
 
 /**
@@ -802,6 +812,52 @@ SmmReadyToBootHandler (
   );
 
 /**
+  Software SMI handler that is called when the S3SmmInitDone signal is triggered.
+  This function installs the SMM S3SmmInitDone Protocol so SMM Drivers are informed that
+  S3 SMM initialization has been done.
+
+  @param  DispatchHandle  The unique handle assigned to this handler by SmiHandlerRegister().
+  @param  Context         Points to an optional handler context which was specified when the handler was registered.
+  @param  CommBuffer      A pointer to a collection of data in memory that will
+                          be conveyed from a non-SMM environment into an SMM environment.
+  @param  CommBufferSize  The size of the CommBuffer.
+
+  @return Status Code
+
+**/
+EFI_STATUS
+EFIAPI
+SmmS3SmmInitDoneHandler (
+  IN     EFI_HANDLE  DispatchHandle,
+  IN     CONST VOID  *Context,        OPTIONAL
+  IN OUT VOID        *CommBuffer,     OPTIONAL
+  IN OUT UINTN       *CommBufferSize  OPTIONAL
+  );
+
+/**
+  Software SMI handler that is called when the EndOfS3Resume event is trigged.
+  This function installs the SMM EndOfS3Resume Protocol so SMM Drivers are informed that
+  S3 resume has finished.
+
+  @param  DispatchHandle  The unique handle assigned to this handler by SmiHandlerRegister().
+  @param  Context         Points to an optional handler context which was specified when the handler was registered.
+  @param  CommBuffer      A pointer to a collection of data in memory that will
+                          be conveyed from a non-SMM environment into an SMM environment.
+  @param  CommBufferSize  The size of the CommBuffer.
+
+  @return Status Code
+
+**/
+EFI_STATUS
+EFIAPI
+SmmEndOfS3ResumeHandler (
+  IN     EFI_HANDLE  DispatchHandle,
+  IN     CONST VOID  *Context,        OPTIONAL
+  IN OUT VOID        *CommBuffer,     OPTIONAL
+  IN OUT UINTN       *CommBufferSize  OPTIONAL
+  );
+
+/**
   Place holder function until all the SMM System Table Service are available.
 
   @param  Arg1                   Undefined
@@ -1230,5 +1286,75 @@ typedef enum {
 } SMM_POOL_TYPE;
 
 extern LIST_ENTRY  mSmmPoolLists[SmmPoolTypeMax][MAX_POOL_INDEX];
+
+/**
+  Internal Function. Allocate n pages from given free page node.
+
+  @param  Pages                  The free page node.
+  @param  NumberOfPages          Number of pages to be allocated.
+  @param  MaxAddress             Request to allocate memory below this address.
+
+  @return Memory address of allocated pages.
+
+**/
+UINTN
+InternalAllocPagesOnOneNode (
+  IN OUT FREE_PAGE_LIST   *Pages,
+  IN     UINTN            NumberOfPages,
+  IN     UINTN            MaxAddress
+  );
+
+/**
+  Update SMM memory map entry.
+
+  @param[in]  Type                   The type of allocation to perform.
+  @param[in]  Memory                 The base of memory address.
+  @param[in]  NumberOfPages          The number of pages to allocate.
+  @param[in]  AddRegion              If this memory is new added region.
+**/
+VOID
+ConvertSmmMemoryMapEntry (
+  IN EFI_MEMORY_TYPE       Type,
+  IN EFI_PHYSICAL_ADDRESS  Memory,
+  IN UINTN                 NumberOfPages,
+  IN BOOLEAN               AddRegion
+  );
+
+/**
+  Internal function.  Moves any memory descriptors that are on the
+  temporary descriptor stack to heap.
+
+**/
+VOID
+CoreFreeMemoryMapStack (
+  VOID
+  );
+
+/**
+  Frees previous allocated pages.
+
+  @param[in]  Memory                 Base address of memory being freed.
+  @param[in]  NumberOfPages          The number of pages to free.
+  @param[in]  AddRegion              If this memory is new added region.
+
+  @retval EFI_NOT_FOUND          Could not find the entry that covers the range.
+  @retval EFI_INVALID_PARAMETER  Address not aligned, Address is zero or NumberOfPages is zero.
+  @return EFI_SUCCESS            Pages successfully freed.
+
+**/
+EFI_STATUS
+SmmInternalFreePagesEx (
+  IN EFI_PHYSICAL_ADDRESS  Memory,
+  IN UINTN                 NumberOfPages,
+  IN BOOLEAN               AddRegion
+  );
+
+/**
+  Hook function used to set all Guard pages after entering SMM mode.
+**/
+VOID
+SmmEntryPointMemoryManagementHook (
+  VOID
+  );
 
 #endif

@@ -2,7 +2,7 @@
                                  OVERVIEW
 ============================================================================
 The binaries of ShellBinPkg are generated with ShellPkg project and built with
-BaseTools Package (git version: 821f24b1283667de391215a2f0c8662ca2fd097d). The
+BaseTools Package (git version: 065a7d406cf8ebc71edb2afc66a70f11d9e83a58). The
 binaries are built with no debug information by building with "RELEASE" target.
 
 To generate Full Shell, execute:

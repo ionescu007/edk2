@@ -1,7 +1,7 @@
 /** @file
   SMM Memory page management functions.
 
-  Copyright (c) 2009 - 2016, Intel Corporation. All rights reserved.<BR>
+  Copyright (c) 2009 - 2018, Intel Corporation. All rights reserved.<BR>
   This program and the accompanying materials are licensed and made available
   under the terms and conditions of the BSD License which accompanies this
   distribution.  The full text of the license may be found at
@@ -64,6 +64,8 @@ LIST_ENTRY   mFreeMemoryMapEntryList = INITIALIZE_LIST_HEAD_VARIABLE (mFreeMemor
   @param[out]  Memory                 A pointer to receive the base allocated memory
                                       address.
   @param[in]   AddRegion              If this memory is new added region.
+  @param[in]   NeedGuard              Flag to indicate Guard page is needed
+                                      or not
 
   @retval EFI_INVALID_PARAMETER  Parameters violate checking rules defined in spec.
   @retval EFI_NOT_FOUND          Could not allocate pages match the requirement.
@@ -77,7 +79,8 @@ SmmInternalAllocatePagesEx (
   IN  EFI_MEMORY_TYPE       MemoryType,
   IN  UINTN                 NumberOfPages,
   OUT EFI_PHYSICAL_ADDRESS  *Memory,
-  IN  BOOLEAN               AddRegion
+  IN  BOOLEAN               AddRegion,
+  IN  BOOLEAN               NeedGuard
   );
 
 /**
@@ -112,7 +115,8 @@ AllocateMemoryMapEntry (
                EfiRuntimeServicesData,
                EFI_SIZE_TO_PAGES (RUNTIME_PAGE_ALLOCATION_GRANULARITY),
                &Mem,
-               TRUE
+               TRUE,
+               FALSE
                );
     ASSERT_EFI_ERROR (Status);
     if(!EFI_ERROR (Status)) {
@@ -242,6 +246,8 @@ RemoveOldEntry (
   )
 {
   RemoveEntryList (&Entry->Link);
+  Entry->Link.ForwardLink = NULL;
+
   if (!Entry->FromStack) {
     InsertTailList (&mFreeMemoryMapEntryList, &Entry->Link);
   }
@@ -688,6 +694,8 @@ InternalAllocAddress (
   @param[out]  Memory                 A pointer to receive the base allocated memory
                                       address.
   @param[in]   AddRegion              If this memory is new added region.
+  @param[in]   NeedGuard              Flag to indicate Guard page is needed
+                                      or not
 
   @retval EFI_INVALID_PARAMETER  Parameters violate checking rules defined in spec.
   @retval EFI_NOT_FOUND          Could not allocate pages match the requirement.
@@ -701,7 +709,8 @@ SmmInternalAllocatePagesEx (
   IN  EFI_MEMORY_TYPE       MemoryType,
   IN  UINTN                 NumberOfPages,
   OUT EFI_PHYSICAL_ADDRESS  *Memory,
-  IN  BOOLEAN               AddRegion
+  IN  BOOLEAN               AddRegion,
+  IN  BOOLEAN               NeedGuard
   )
 {
   UINTN  RequestedAddress;
@@ -723,6 +732,21 @@ SmmInternalAllocatePagesEx (
     case AllocateAnyPages:
       RequestedAddress = (UINTN)(-1);
     case AllocateMaxAddress:
+      if (NeedGuard) {
+        *Memory = InternalAllocMaxAddressWithGuard (
+                      &mSmmMemoryMap,
+                      NumberOfPages,
+                      RequestedAddress,
+                      MemoryType
+                      );
+        if (*Memory == (UINTN)-1) {
+          return EFI_OUT_OF_RESOURCES;
+        } else {
+          ASSERT (VerifyMemoryGuard (*Memory, NumberOfPages) == TRUE);
+          return EFI_SUCCESS;
+        }
+      }
+
       *Memory = InternalAllocMaxAddress (
                   &mSmmMemoryMap,
                   NumberOfPages,
@@ -766,6 +790,8 @@ SmmInternalAllocatePagesEx (
   @param[in]   NumberOfPages          The number of pages to allocate.
   @param[out]  Memory                 A pointer to receive the base allocated memory
                                       address.
+  @param[in]   NeedGuard              Flag to indicate Guard page is needed
+                                      or not
 
   @retval EFI_INVALID_PARAMETER  Parameters violate checking rules defined in spec.
   @retval EFI_NOT_FOUND          Could not allocate pages match the requirement.
@@ -779,10 +805,12 @@ SmmInternalAllocatePages (
   IN  EFI_ALLOCATE_TYPE     Type,
   IN  EFI_MEMORY_TYPE       MemoryType,
   IN  UINTN                 NumberOfPages,
-  OUT EFI_PHYSICAL_ADDRESS  *Memory
+  OUT EFI_PHYSICAL_ADDRESS  *Memory,
+  IN  BOOLEAN               NeedGuard
   )
 {
-  return SmmInternalAllocatePagesEx (Type, MemoryType, NumberOfPages, Memory, FALSE);
+  return SmmInternalAllocatePagesEx (Type, MemoryType, NumberOfPages, Memory,
+                                     FALSE, NeedGuard);
 }
 
 /**
@@ -811,8 +839,11 @@ SmmAllocatePages (
   )
 {
   EFI_STATUS  Status;
+  BOOLEAN     NeedGuard;
 
-  Status = SmmInternalAllocatePages (Type, MemoryType, NumberOfPages, Memory);
+  NeedGuard = IsPageTypeToGuard (MemoryType, Type);
+  Status = SmmInternalAllocatePages (Type, MemoryType, NumberOfPages, Memory,
+                                     NeedGuard);
   if (!EFI_ERROR (Status)) {
     SmmCoreUpdateProfile (
       (EFI_PHYSICAL_ADDRESS) (UINTN) RETURN_ADDRESS (0),
@@ -931,6 +962,7 @@ SmmInternalFreePagesEx (
 
   @param[in]  Memory                 Base address of memory being freed.
   @param[in]  NumberOfPages          The number of pages to free.
+  @param[in]  IsGuarded              Is the memory to free guarded or not.
 
   @retval EFI_NOT_FOUND          Could not find the entry that covers the range.
   @retval EFI_INVALID_PARAMETER  Address not aligned, Address is zero or NumberOfPages is zero.
@@ -941,9 +973,13 @@ EFI_STATUS
 EFIAPI
 SmmInternalFreePages (
   IN EFI_PHYSICAL_ADDRESS  Memory,
-  IN UINTN                 NumberOfPages
+  IN UINTN                 NumberOfPages,
+  IN BOOLEAN               IsGuarded
   )
 {
+  if (IsGuarded) {
+    return SmmInternalFreePagesExWithGuard (Memory, NumberOfPages, FALSE);
+  }
   return SmmInternalFreePagesEx (Memory, NumberOfPages, FALSE);
 }
 
@@ -966,8 +1002,10 @@ SmmFreePages (
   )
 {
   EFI_STATUS  Status;
+  BOOLEAN     IsGuarded;
 
-  Status = SmmInternalFreePages (Memory, NumberOfPages);
+  IsGuarded = IsHeapGuardEnabled () && IsMemoryGuarded (Memory);
+  Status = SmmInternalFreePages (Memory, NumberOfPages, IsGuarded);
   if (!EFI_ERROR (Status)) {
     SmmCoreUpdateProfile (
       (EFI_PHYSICAL_ADDRESS) (UINTN) RETURN_ADDRESS (0),

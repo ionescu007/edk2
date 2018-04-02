@@ -1,6 +1,6 @@
 /** @file
 *
-*  Copyright (c) 2011-2014, ARM Limited. All rights reserved.
+*  Copyright (c) 2011-2017, ARM Limited. All rights reserved.
 *
 *  This program and the accompanying materials
 *  are licensed and made available under the terms and conditions of the BSD License
@@ -17,35 +17,21 @@
 #include <Library/DebugAgentLib.h>
 #include <Library/PrePiLib.h>
 #include <Library/PrintLib.h>
-#include <Library/PeCoffGetEntryPointLib.h>
 #include <Library/PrePiHobListPointerLib.h>
 #include <Library/TimerLib.h>
 #include <Library/PerformanceLib.h>
 
 #include <Ppi/GuidedSectionExtraction.h>
 #include <Ppi/ArmMpCoreInfo.h>
-#include <Guid/LzmaDecompress.h>
+#include <Ppi/SecPerformance.h>
 
 #include "PrePi.h"
-#include "LzmaDecompress.h"
 
 #define IS_XIP() (((UINT64)FixedPcdGet64 (PcdFdBaseAddress) > mSystemMemoryEnd) || \
                   ((FixedPcdGet64 (PcdFdBaseAddress) + FixedPcdGet32 (PcdFdSize)) < FixedPcdGet64 (PcdSystemMemoryBase)))
 
 UINT64 mSystemMemoryEnd = FixedPcdGet64(PcdSystemMemoryBase) +
                           FixedPcdGet64(PcdSystemMemorySize) - 1;
-
-EFI_STATUS
-EFIAPI
-ExtractGuidedSectionLibConstructor (
-  VOID
-  );
-
-EFI_STATUS
-EFIAPI
-LzmaDecompressLibConstructor (
-  VOID
-  );
 
 EFI_STATUS
 GetPlatformPpi (
@@ -86,6 +72,7 @@ PrePiMain (
   CHAR8                         Buffer[100];
   UINTN                         CharCount;
   UINTN                         StacksSize;
+  FIRMWARE_SEC_PERFORMANCE      Performance;
 
   // If ensure the FD is either part of the System Memory or totally outside of the System Memory (XIP)
   ASSERT (IS_XIP() ||
@@ -146,6 +133,12 @@ PrePiMain (
     }
   }
 
+  // Store timer value logged at the beginning of firmware image execution
+  Performance.ResetEnd = GetTimeInNanoSecond (StartTimeStamp);
+
+  // Build SEC Performance Data Hob
+  BuildGuidDataHob (&gEfiFirmwarePerformanceGuid, &Performance, sizeof (Performance));
+
   // Set the Boot Mode
   SetBootMode (ArmPlatformGetBootMode ());
 
@@ -157,16 +150,7 @@ PrePiMain (
   PERF_START (NULL, "PEI", NULL, StartTimeStamp);
 
   // SEC phase needs to run library constructors by hand.
-  ExtractGuidedSectionLibConstructor ();
-  LzmaDecompressLibConstructor ();
-
-  // Build HOBs to pass up our version of stuff the DXE Core needs to save space
-  BuildPeCoffLoaderHob ();
-  BuildExtractSectionHob (
-    &gLzmaCustomDecompressGuid,
-    LzmaGuidedSectionGetInfo,
-    LzmaGuidedSectionExtraction
-    );
+  ProcessLibraryConstructorList ();
 
   // Assume the FV that contains the SEC (our code) also contains a compressed FV.
   Status = DecompressFirstFv ();

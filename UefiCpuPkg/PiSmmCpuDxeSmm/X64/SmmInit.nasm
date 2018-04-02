@@ -1,5 +1,5 @@
 ;------------------------------------------------------------------------------ ;
-; Copyright (c) 2016, Intel Corporation. All rights reserved.<BR>
+; Copyright (c) 2016 - 2018, Intel Corporation. All rights reserved.<BR>
 ; This program and the accompanying materials
 ; are licensed and made available under the terms and conditions of the BSD License
 ; which accompanies this distribution.  The full text of the license may be found at
@@ -42,6 +42,11 @@ ASM_PFX(gcSmiInitGdtr):
 
 global ASM_PFX(SmmStartup)
 ASM_PFX(SmmStartup):
+    DB      0x66
+    mov     eax, 0x80000001             ; read capability
+    cpuid
+    DB      0x66
+    mov     ebx, edx                    ; rdmsr will change edx. keep it in ebx.
     DB      0x66, 0xb8                   ; mov eax, imm32
 ASM_PFX(gSmmCr3): DD 0
     mov     cr3, rax
@@ -54,13 +59,18 @@ ASM_PFX(gSmmCr4): DD 0
     DB      0x66
     mov     ecx, 0xc0000080             ; IA32_EFER MSR
     rdmsr
-    or      ah, 1                       ; set LME bit
+    or      ah, BIT0                    ; set LME bit
+    DB      0x66
+    test    ebx, BIT20                  ; check NXE capability
+    jz      .1
+    or      ah, BIT3                    ; set NXE bit
+.1:
     wrmsr
     DB      0x66, 0xb8                   ; mov eax, imm32
 ASM_PFX(gSmmCr0): DD 0
     mov     cr0, rax                    ; enable protected mode & paging
     DB      0x66, 0xea                   ; far jmp to long mode
-ASM_PFX(gSmmJmpAddr): DQ @LongMode
+ASM_PFX(gSmmJmpAddr): DQ 0;@LongMode
 @LongMode:                              ; long-mode starts here
     DB      0x48, 0xbc                   ; mov rsp, imm64
 ASM_PFX(gSmmInitStack): DQ 0
@@ -99,7 +109,7 @@ ASM_PFX(gcSmmInitTemplate):
     sub ebp, 0x30000
     jmp ebp
 @L1:
-    DQ      ASM_PFX(SmmStartup)
+    DQ     0; ASM_PFX(SmmStartup)
 
 ASM_PFX(gcSmmInitSize): DW $ - ASM_PFX(gcSmmInitTemplate)
 
@@ -128,3 +138,14 @@ ASM_PFX(mRebasedFlagAddr32): dd 0
     ;
     db      0xff, 0x25
 ASM_PFX(mSmmRelocationOriginalAddressPtr32): dd 0
+
+global ASM_PFX(PiSmmCpuSmmInitFixupAddress)
+ASM_PFX(PiSmmCpuSmmInitFixupAddress):
+    lea    rax, [@LongMode]
+    lea    rcx, [ASM_PFX(gSmmJmpAddr)]
+    mov    qword [rcx], rax
+
+    lea    rax, [ASM_PFX(SmmStartup)]
+    lea    rcx, [@L1]
+    mov    qword [rcx], rax
+    ret

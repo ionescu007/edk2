@@ -3,7 +3,7 @@
   and volatile storage space and install variable architecture protocol.
 
 Copyright (C) 2013, Red Hat, Inc.
-Copyright (c) 2006 - 2017, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2006 - 2018, Intel Corporation. All rights reserved.<BR>
 (C) Copyright 2015 Hewlett Packard Enterprise Development LP<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
@@ -291,6 +291,7 @@ OnReadyToBoot (
   )
 {
   if (!mEndOfDxe) {
+    MorLockInitAtEndOfDxe ();
     //
     // Set the End Of DXE bit in case the EFI_END_OF_DXE_EVENT_GROUP_GUID event is not signaled.
     //
@@ -330,6 +331,7 @@ OnEndOfDxe (
   )
 {
   DEBUG ((EFI_D_INFO, "[Variable]END_OF_DXE is signaled\n"));
+  MorLockInitAtEndOfDxe ();
   mEndOfDxe = TRUE;
   mVarCheckAddressPointer = VarCheckLibInitializeAtEndOfDxe (&mVarCheckAddressPointerCount);
   //
@@ -545,7 +547,7 @@ VariableServiceInitialize (
   //
   Status = gBS->CreateEventEx (
                   EVT_NOTIFY_SIGNAL,
-                  TPL_NOTIFY,
+                  TPL_CALLBACK,
                   OnEndOfDxe,
                   NULL,
                   &gEfiEndOfDxeEventGroupGuid,

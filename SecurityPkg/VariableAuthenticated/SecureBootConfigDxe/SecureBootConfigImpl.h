@@ -67,7 +67,7 @@ extern  EFI_IFR_GUID_LABEL         *mEndLabel;
 
 #define MAX_CHAR              480
 #define TWO_BYTE_ENCODE       0x82
-
+#define BUFFER_MAX_SIZE       100
 
 //
 // SHA-256 digest size in bytes
@@ -152,16 +152,16 @@ typedef struct {
 } HII_VENDOR_DEVICE_PATH;
 
 typedef enum {
-  VARIABLE_DB,
-  VARIABLE_DBX,
-  VARIABLE_DBT,
-  VARIABLE_MAX
+  Variable_DB,
+  Variable_DBX,
+  Variable_DBT,
+  Variable_MAX
 } CURRENT_VARIABLE_NAME;
 
 typedef enum {
-  DELETE_SIGNATURE_LIST_ALL,
-  DELETE_SIGNATURE_LIST_ONE,
-  DELETE_SIGNATURE_DATA
+  Delete_Signature_List_All,
+  Delete_Signature_List_One,
+  Delete_Signature_Data
 }SIGNATURE_DELETE_TYPE;
 
 typedef struct {

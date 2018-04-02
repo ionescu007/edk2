@@ -30,9 +30,13 @@
 
 [Sources]
   CsmSupportLib.c
+  CsmSupportLib.h
   LegacyInterrupt.c
-  LegacyRegion.c
+  LegacyInterrupt.h
   LegacyPlatform.c
+  LegacyPlatform.h
+  LegacyRegion.c
+  LegacyRegion.h
 
 [Packages]
   MdePkg/MdePkg.dec

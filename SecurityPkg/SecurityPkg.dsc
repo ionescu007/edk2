@@ -1,7 +1,7 @@
 ## @file
 #  Security Module Package for All Architectures.
 #
-# Copyright (c) 2009 - 2017, Intel Corporation. All rights reserved.<BR>
+# Copyright (c) 2009 - 2018, Intel Corporation. All rights reserved.<BR>
 # (C) Copyright 2015 Hewlett Packard Enterprise Development LP<BR>
 # This program and the accompanying materials
 # are licensed and made available under the terms and conditions of the BSD License
@@ -16,7 +16,7 @@
 [Defines]
   PLATFORM_NAME                  = SecurityPkg
   PLATFORM_GUID                  = B2C4614D-AE76-47ba-B876-5988BFED064F
-  PLATFORM_VERSION               = 0.97
+  PLATFORM_VERSION               = 0.98
   DSC_SPECIFICATION              = 0x00010005
   OUTPUT_DIRECTORY               = Build/SecurityPkg
   SUPPORTED_ARCHITECTURES        = IA32|IPF|X64|EBC|ARM|AARCH64
@@ -60,10 +60,8 @@
   Tpm12CommandLib|SecurityPkg/Library/Tpm12CommandLib/Tpm12CommandLib.inf
   Tpm2CommandLib|SecurityPkg/Library/Tpm2CommandLib/Tpm2CommandLib.inf
   Tcg2PhysicalPresenceLib|SecurityPkg/Library/DxeTcg2PhysicalPresenceLib/DxeTcg2PhysicalPresenceLib.inf
-  TrEEPhysicalPresenceLib|SecurityPkg/Library/DxeTrEEPhysicalPresenceLib/DxeTrEEPhysicalPresenceLib.inf
   TcgPpVendorLib|SecurityPkg/Library/TcgPpVendorLibNull/TcgPpVendorLibNull.inf
   Tcg2PpVendorLib|SecurityPkg/Library/Tcg2PpVendorLibNull/Tcg2PpVendorLibNull.inf
-  TrEEPpVendorLib|SecurityPkg/Library/TrEEPpVendorLibNull/TrEEPpVendorLibNull.inf
   RngLib|MdePkg/Library/BaseRngLib/BaseRngLib.inf
   PciLib|MdePkg/Library/BasePciLibPciExpress/BasePciLibPciExpress.inf
   PciSegmentLib|MdePkg/Library/BasePciSegmentLibPci/BasePciSegmentLibPci.inf
@@ -73,7 +71,6 @@
   PciExpressLib|MdePkg/Library/BasePciExpressLib/BasePciExpressLib.inf
   TcgStorageCoreLib|SecurityPkg/Library/TcgStorageCoreLib/TcgStorageCoreLib.inf
   TcgStorageOpalLib|SecurityPkg/Library/TcgStorageOpalLib/TcgStorageOpalLib.inf
-  OpalPasswordSupportLib|SecurityPkg/Library/OpalPasswordSupportLib/OpalPasswordSupportLib.inf
   ResetSystemLib|MdeModulePkg/Library/BaseResetSystemLibNull/BaseResetSystemLibNull.inf
 
 [LibraryClasses.common.PEIM]
@@ -160,11 +157,6 @@
   #SecurityPkg/UserIdentification/UserProfileManagerDxe/UserProfileManagerDxe.inf
 
   #
-  # Application
-  #
-  SecurityPkg/Application/RngTest/RngTest.inf
-
-  #
   # TPM
   #
   SecurityPkg/Library/DxeTpmMeasureBootLib/DxeTpmMeasureBootLib.inf
@@ -183,20 +175,12 @@
   SecurityPkg/Library/DxeTpm2MeasureBootLib/DxeTpm2MeasureBootLib.inf
   SecurityPkg/Library/DxeTcg2PhysicalPresenceLib/DxeTcg2PhysicalPresenceLib.inf
   SecurityPkg/Library/PeiTcg2PhysicalPresenceLib/PeiTcg2PhysicalPresenceLib.inf
-  #
-  # TrEE - to be deprecated
-  #
-  SecurityPkg/Library/DxeTrEEPhysicalPresenceLib/DxeTrEEPhysicalPresenceLib.inf
 
   SecurityPkg/Library/HashLibBaseCryptoRouter/HashLibBaseCryptoRouterDxe.inf
   SecurityPkg/Library/HashLibBaseCryptoRouter/HashLibBaseCryptoRouterPei.inf
 
   SecurityPkg/Library/Tpm2CommandLib/Tpm2CommandLib.inf
   SecurityPkg/Library/Tpm2DeviceLibTcg2/Tpm2DeviceLibTcg2.inf
-  #
-  # TrEE - to be deprecated
-  #
-  SecurityPkg/Library/Tpm2DeviceLibTrEE/Tpm2DeviceLibTrEE.inf
   SecurityPkg/Library/Tpm2DeviceLibDTpm/Tpm2DeviceLibDTpm.inf
   SecurityPkg/Library/Tpm2DeviceLibDTpm/Tpm2InstanceLibDTpm.inf
   SecurityPkg/Library/Tpm2DeviceLibRouter/Tpm2DeviceLibRouterDxe.inf
@@ -209,7 +193,6 @@
   #
   SecurityPkg/Library/TcgStorageCoreLib/TcgStorageCoreLib.inf
   SecurityPkg/Library/TcgStorageOpalLib/TcgStorageOpalLib.inf
-  SecurityPkg/Library/OpalPasswordSupportLib/OpalPasswordSupportLib.inf
 
   #
   # Other
@@ -220,6 +203,7 @@
   SecurityPkg/Library/FmpAuthenticationLibPkcs7/FmpAuthenticationLibPkcs7.inf
   SecurityPkg/Library/FmpAuthenticationLibRsa2048Sha256/FmpAuthenticationLibRsa2048Sha256.inf
 
+[Components.IA32, Components.X64, Components.IPF, Components.ARM, Components.AARCH64]
   SecurityPkg/Library/AuthVariableLib/AuthVariableLib.inf
 
 [Components.IA32, Components.X64, Components.IPF]
@@ -270,35 +254,6 @@
   }
 
   #
-  # TrEE - to be deprecated
-  #
-  SecurityPkg/Tcg/TrEEConfig/TrEEConfigPei.inf {
-    <LibraryClasses>
-      Tpm12DeviceLib|SecurityPkg/Library/Tpm12DeviceLibDTpm/Tpm12DeviceLibDTpm.inf
-      Tpm2DeviceLib|SecurityPkg/Library/Tpm2DeviceLibDTpm/Tpm2DeviceLibDTpm.inf
-  }
-  SecurityPkg/Tcg/TrEEPei/TrEEPei.inf {
-    <LibraryClasses>
-      Tpm2DeviceLib|SecurityPkg/Library/Tpm2DeviceLibRouter/Tpm2DeviceLibRouterPei.inf
-      NULL|SecurityPkg/Library/Tpm2DeviceLibDTpm/Tpm2InstanceLibDTpm.inf
-      NULL|SecurityPkg/Library/HashInstanceLibSha1/HashInstanceLibSha1.inf
-      NULL|SecurityPkg/Library/HashInstanceLibSha256/HashInstanceLibSha256.inf
-  }
-
-  SecurityPkg/Tcg/TrEEDxe/TrEEDxe.inf {
-    <LibraryClasses>
-      Tpm2DeviceLib|SecurityPkg/Library/Tpm2DeviceLibRouter/Tpm2DeviceLibRouterDxe.inf
-      NULL|SecurityPkg/Library/Tpm2DeviceLibDTpm/Tpm2InstanceLibDTpm.inf
-      NULL|SecurityPkg/Library/HashInstanceLibSha1/HashInstanceLibSha1.inf
-      NULL|SecurityPkg/Library/HashInstanceLibSha256/HashInstanceLibSha256.inf
-      PcdLib|MdePkg/Library/DxePcdLib/DxePcdLib.inf
-  }
-  SecurityPkg/Tcg/TrEEConfig/TrEEConfigDxe.inf {
-    <LibraryClasses>
-      Tpm2DeviceLib|SecurityPkg/Library/Tpm2DeviceLibTrEE/Tpm2DeviceLibTrEE.inf
-  }
-
-  #
   # Hash2
   #
   SecurityPkg/Hash2DxeCrypto/Hash2DxeCrypto.inf
@@ -314,10 +269,7 @@
   SecurityPkg/Tcg/TcgSmm/TcgSmm.inf
   SecurityPkg/Tcg/Tcg2Smm/Tcg2Smm.inf
   SecurityPkg/Library/SmmTcg2PhysicalPresenceLib/SmmTcg2PhysicalPresenceLib.inf
-  #
-  # TrEE - to be deprecated
-  #
-  SecurityPkg/Tcg/TrEESmm/TrEESmm.inf
+
   #
   # Random Number Generator
   #
@@ -326,8 +278,8 @@
   #
   # Opal Password solution
   #
-  SecurityPkg/Tcg/Opal/OpalPasswordDxe/OpalPasswordDxe.inf
-  SecurityPkg/Tcg/Opal/OpalPasswordSmm/OpalPasswordSmm.inf
+  SecurityPkg/Tcg/Opal/OpalPassword/OpalPasswordDxe.inf
+  SecurityPkg/Tcg/Opal/OpalPassword/OpalPasswordPei.inf
 
 [Components.IPF]
   SecurityPkg/VariableAuthenticated/EsalVariableDxeSal/EsalVariableDxeSal.inf

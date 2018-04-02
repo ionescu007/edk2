@@ -19,7 +19,7 @@
 
   Once the image is unloaded, the protection is removed automatically.
 
-Copyright (c) 2017, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2017 - 2018, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -48,6 +48,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #include <Protocol/SimpleFileSystem.h>
 
 #include "DxeMain.h"
+#include "Mem/HeapGuard.h"
 
 #define CACHE_ATTRIBUTE_MASK   (EFI_MEMORY_UC | EFI_MEMORY_WC | EFI_MEMORY_WT | EFI_MEMORY_WB | EFI_MEMORY_UCE | EFI_MEMORY_WP)
 #define MEMORY_ATTRIBUTE_MASK  (EFI_MEMORY_RP | EFI_MEMORY_XP | EFI_MEMORY_RO)
@@ -800,6 +801,9 @@ InitializeDxeNxMemoryProtectionPolicy (
   UINT64                            Attributes;
   LIST_ENTRY                        *Link;
   EFI_GCD_MAP_ENTRY                 *Entry;
+  EFI_PEI_HOB_POINTERS              Hob;
+  EFI_HOB_MEMORY_ALLOCATION         *MemoryHob;
+  EFI_PHYSICAL_ADDRESS              StackBase;
 
   //
   // Get the EFI memory map.
@@ -831,8 +835,45 @@ InitializeDxeNxMemoryProtectionPolicy (
   } while (Status == EFI_BUFFER_TOO_SMALL);
   ASSERT_EFI_ERROR (Status);
 
-  DEBUG((DEBUG_ERROR, "%a: applying strict permissions to active memory regions\n",
-    __FUNCTION__));
+  StackBase = 0;
+  if (PcdGetBool (PcdCpuStackGuard)) {
+    //
+    // Get the base of stack from Hob.
+    //
+    Hob.Raw = GetHobList ();
+    while ((Hob.Raw = GetNextHob (EFI_HOB_TYPE_MEMORY_ALLOCATION, Hob.Raw)) != NULL) {
+      MemoryHob = Hob.MemoryAllocation;
+      if (CompareGuid(&gEfiHobMemoryAllocStackGuid, &MemoryHob->AllocDescriptor.Name)) {
+        DEBUG ((
+          DEBUG_INFO,
+          "%a: StackBase = 0x%016lx  StackSize = 0x%016lx\n",
+          __FUNCTION__,
+          MemoryHob->AllocDescriptor.MemoryBaseAddress,
+          MemoryHob->AllocDescriptor.MemoryLength
+          ));
+
+        StackBase = MemoryHob->AllocDescriptor.MemoryBaseAddress;
+        //
+        // Ensure the base of the stack is page-size aligned.
+        //
+        ASSERT ((StackBase & EFI_PAGE_MASK) == 0);
+        break;
+      }
+      Hob.Raw = GET_NEXT_HOB (Hob);
+    }
+
+    //
+    // Ensure the base of stack can be found from Hob when stack guard is
+    // enabled.
+    //
+    ASSERT (StackBase != 0);
+  }
+
+  DEBUG ((
+    DEBUG_INFO,
+    "%a: applying strict permissions to active memory regions\n",
+    __FUNCTION__
+    ));
 
   MergeMemoryMapForProtectionPolicy (MemoryMap, &MemoryMapSize, DescriptorSize);
 
@@ -846,6 +887,37 @@ InitializeDxeNxMemoryProtectionPolicy (
         MemoryMapEntry->PhysicalStart,
         LShiftU64 (MemoryMapEntry->NumberOfPages, EFI_PAGE_SHIFT),
         Attributes);
+
+      //
+      // Add EFI_MEMORY_RP attribute for page 0 if NULL pointer detection is
+      // enabled.
+      //
+      if (MemoryMapEntry->PhysicalStart == 0 &&
+          PcdGet8 (PcdNullPointerDetectionPropertyMask) != 0) {
+
+        ASSERT (MemoryMapEntry->NumberOfPages > 0);
+        SetUefiImageMemoryAttributes (
+          0,
+          EFI_PAGES_TO_SIZE (1),
+          EFI_MEMORY_RP | Attributes);
+      }
+
+      //
+      // Add EFI_MEMORY_RP attribute for the first page of the stack if stack
+      // guard is enabled.
+      //
+      if (StackBase != 0 &&
+          (StackBase >= MemoryMapEntry->PhysicalStart &&
+           StackBase <  MemoryMapEntry->PhysicalStart +
+                        LShiftU64 (MemoryMapEntry->NumberOfPages, EFI_PAGE_SHIFT)) &&
+          PcdGetBool (PcdCpuStackGuard)) {
+
+        SetUefiImageMemoryAttributes (
+          StackBase,
+          EFI_PAGES_TO_SIZE (1),
+          EFI_MEMORY_RP | Attributes);
+      }
+
     }
     MemoryMapEntry = NEXT_MEMORY_DESCRIPTOR (MemoryMapEntry, DescriptorSize);
   }
@@ -856,9 +928,11 @@ InitializeDxeNxMemoryProtectionPolicy (
   // accessible, but have not been added to the UEFI memory map (yet).
   //
   if (GetPermissionAttributeForMemoryType (EfiConventionalMemory) != 0) {
-    DEBUG((DEBUG_ERROR,
+    DEBUG ((
+      DEBUG_INFO,
       "%a: applying strict permissions to inactive memory regions\n",
-      __FUNCTION__));
+      __FUNCTION__
+      ));
 
     CoreAcquireGcdMemoryLock ();
 
@@ -926,6 +1000,11 @@ MemoryProtectionCpuArchProtocolNotify (
   if (PcdGet64 (PcdDxeNxMemoryProtectionPolicy) != 0) {
     InitializeDxeNxMemoryProtectionPolicy ();
   }
+
+  //
+  // Call notify function meant for Heap Guard.
+  //
+  HeapGuardCpuArchProtocolNotify ();
 
   if (mImageProtectionPolicy == 0) {
     return;
@@ -996,6 +1075,53 @@ MemoryProtectionExitBootServicesCallback (
 }
 
 /**
+  Disable NULL pointer detection after EndOfDxe. This is a workaround resort in
+  order to skip unfixable NULL pointer access issues detected in OptionROM or
+  boot loaders.
+
+  @param[in]  Event     The Event this notify function registered to.
+  @param[in]  Context   Pointer to the context data registered to the Event.
+**/
+VOID
+EFIAPI
+DisableNullDetectionAtTheEndOfDxe (
+  EFI_EVENT                               Event,
+  VOID                                    *Context
+  )
+{
+  EFI_STATUS                        Status;
+  EFI_GCD_MEMORY_SPACE_DESCRIPTOR   Desc;
+
+  DEBUG ((DEBUG_INFO, "DisableNullDetectionAtTheEndOfDxe(): start\r\n"));
+  //
+  // Disable NULL pointer detection by enabling first 4K page
+  //
+  Status = CoreGetMemorySpaceDescriptor (0, &Desc);
+  ASSERT_EFI_ERROR (Status);
+
+  if ((Desc.Capabilities & EFI_MEMORY_RP) == 0) {
+    Status = CoreSetMemorySpaceCapabilities (
+              0,
+              EFI_PAGE_SIZE,
+              Desc.Capabilities | EFI_MEMORY_RP
+              );
+    ASSERT_EFI_ERROR (Status);
+  }
+
+  Status = CoreSetMemorySpaceAttributes (
+            0,
+            EFI_PAGE_SIZE,
+            Desc.Attributes & ~EFI_MEMORY_RP
+            );
+  ASSERT_EFI_ERROR (Status);
+
+  CoreCloseEvent (Event);
+  DEBUG ((DEBUG_INFO, "DisableNullDetectionAtTheEndOfDxe(): end\r\n"));
+
+  return;
+}
+
+/**
   Initialize Memory Protection support.
 **/
 VOID
@@ -1006,6 +1132,7 @@ CoreInitializeMemoryProtection (
 {
   EFI_STATUS  Status;
   EFI_EVENT   Event;
+  EFI_EVENT   EndOfDxeEvent;
   VOID        *Registration;
 
   mImageProtectionPolicy = PcdGet32(PcdImageProtectionPolicy);
@@ -1044,6 +1171,23 @@ CoreInitializeMemoryProtection (
                );
     ASSERT_EFI_ERROR(Status);
   }
+
+  //
+  // Register a callback to disable NULL pointer detection at EndOfDxe
+  //
+  if ((PcdGet8 (PcdNullPointerDetectionPropertyMask) & (BIT0|BIT7))
+       == (BIT0|BIT7)) {
+    Status = CoreCreateEventEx (
+                    EVT_NOTIFY_SIGNAL,
+                    TPL_NOTIFY,
+                    DisableNullDetectionAtTheEndOfDxe,
+                    NULL,
+                    &gEfiEndOfDxeEventGroupGuid,
+                    &EndOfDxeEvent
+                    );
+    ASSERT_EFI_ERROR (Status);
+  }
+
   return ;
 }
 
@@ -1116,6 +1260,27 @@ ApplyMemoryProtectionPolicy (
   //
   if (PcdGet64 (PcdDxeNxMemoryProtectionPolicy) == 0) {
     return EFI_SUCCESS;
+  }
+
+  //
+  // Don't overwrite Guard pages, which should be the first and/or last page,
+  // if any.
+  //
+  if (IsHeapGuardEnabled ()) {
+    if (IsGuardPage (Memory))  {
+      Memory += EFI_PAGE_SIZE;
+      Length -= EFI_PAGE_SIZE;
+      if (Length == 0) {
+        return EFI_SUCCESS;
+      }
+    }
+
+    if (IsGuardPage (Memory + Length - EFI_PAGE_SIZE))  {
+      Length -= EFI_PAGE_SIZE;
+      if (Length == 0) {
+        return EFI_SUCCESS;
+      }
+    }
   }
 
   //

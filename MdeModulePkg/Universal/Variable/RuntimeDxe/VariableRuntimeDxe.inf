@@ -41,6 +41,7 @@
   Variable.c
   VariableDxe.c
   Variable.h
+  PrivilegePolymorphic.h
   Measurement.c
   TcgMorLockDxe.c
   VarCheck.c
@@ -122,6 +123,7 @@
   gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageVariableBase64    ## CONSUMES
   gEfiMdeModulePkgTokenSpaceGuid.PcdMaxVariableSize                 ## CONSUMES
   gEfiMdeModulePkgTokenSpaceGuid.PcdMaxAuthVariableSize             ## CONSUMES
+  gEfiMdeModulePkgTokenSpaceGuid.PcdMaxVolatileVariableSize         ## CONSUMES
   gEfiMdeModulePkgTokenSpaceGuid.PcdMaxHardwareErrorVariableSize    ## CONSUMES
   gEfiMdeModulePkgTokenSpaceGuid.PcdVariableStoreSize               ## CONSUMES
   gEfiMdeModulePkgTokenSpaceGuid.PcdHwErrStorageSize                ## CONSUMES

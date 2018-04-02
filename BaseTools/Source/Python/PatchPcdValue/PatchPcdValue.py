@@ -110,10 +110,7 @@ def PatchBinaryFile(FileName, ValueOffset, TypeName, ValueString, MaxSize=0):
                 ValueNumber = 1
             elif ValueString == 'FALSE':
                 ValueNumber = 0
-            elif ValueString.startswith('0X'):
-                ValueNumber = int (ValueString, 16)
-            else:
-                ValueNumber = int (ValueString)
+            ValueNumber = int (ValueString, 0)
             if ValueNumber != 0:
                 ValueNumber = 1
         except:
@@ -127,10 +124,7 @@ def PatchBinaryFile(FileName, ValueOffset, TypeName, ValueString, MaxSize=0):
         # Get PCD value for UINT* data type
         #
         try:
-            if ValueString.startswith('0X'):
-                ValueNumber = int (ValueString, 16)
-            else:
-                ValueNumber = int (ValueString)
+            ValueNumber = int (ValueString, 0)
         except:
             return PARAMETER_INVALID, "PCD Value %s is not valid dec or hex string." % (ValueString)
         #
@@ -161,10 +155,11 @@ def PatchBinaryFile(FileName, ValueOffset, TypeName, ValueString, MaxSize=0):
             #
             # Patch {0x1, 0x2, ...} byte by byte
             #
-            ValueList = ValueString[1 : len(ValueString) - 1].split(', ')
+            ValueList = ValueString[1 : len(ValueString) - 1].split(',')
             Index = 0
             try:
                 for ByteString in ValueList:
+                    ByteString = ByteString.strip()
                     if ByteString.upper().startswith('0X'):
                         ByteValue = int(ByteString, 16)
                     else:
@@ -266,13 +261,13 @@ def Main():
         if not os.path.exists (InputFile):
             EdkLogger.error("PatchPcdValue", FILE_NOT_FOUND, ExtraData=InputFile)
             return 1
-        if CommandOptions.PcdOffset == None or CommandOptions.PcdValue == None or CommandOptions.PcdTypeName == None:
+        if CommandOptions.PcdOffset is None or CommandOptions.PcdValue is None or CommandOptions.PcdTypeName is None:
             EdkLogger.error("PatchPcdValue", OPTION_MISSING, ExtraData="PcdOffset or PcdValue of PcdTypeName is not specified.")
             return 1
         if CommandOptions.PcdTypeName.upper() not in ["BOOLEAN", "UINT8", "UINT16", "UINT32", "UINT64", "VOID*"]:
             EdkLogger.error("PatchPcdValue", PARAMETER_INVALID, ExtraData="PCD type %s is not valid." % (CommandOptions.PcdTypeName))
             return 1
-        if CommandOptions.PcdTypeName.upper() == "VOID*" and CommandOptions.PcdMaxSize == None:
+        if CommandOptions.PcdTypeName.upper() == "VOID*" and CommandOptions.PcdMaxSize is None:
             EdkLogger.error("PatchPcdValue", OPTION_MISSING, ExtraData="PcdMaxSize is not specified for VOID* type PCD.")
             return 1
         #

@@ -25,6 +25,7 @@
 #include <Library/UefiBootManagerLib.h>
 #include <Library/UefiLib.h>
 #include <Protocol/DevicePath.h>
+#include <Protocol/EsrtManagement.h>
 #include <Protocol/GraphicsOutput.h>
 #include <Protocol/LoadedImage.h>
 #include <Protocol/PciIo.h>
@@ -449,12 +450,19 @@ PlatformBootManagerBeforeConsole (
   VOID
   )
 {
-  EFI_STATUS    Status;
+  EFI_STATUS                    Status;
+  ESRT_MANAGEMENT_PROTOCOL      *EsrtManagement;
 
   if (GetBootModeHob() == BOOT_ON_FLASH_UPDATE) {
     DEBUG ((DEBUG_INFO, "ProcessCapsules Before EndOfDxe ......\n"));
     Status = ProcessCapsules ();
     DEBUG ((DEBUG_INFO, "ProcessCapsules returned %r\n", Status));
+  } else {
+    Status = gBS->LocateProtocol (&gEsrtManagementProtocolGuid, NULL,
+                    (VOID **)&EsrtManagement);
+    if (!EFI_ERROR (Status)) {
+      EsrtManagement->SyncEsrtFmp ();
+    }
   }
 
   //
@@ -507,6 +515,8 @@ PlatformBootManagerBeforeConsole (
   PlatformRegisterOptionsAndKeys ();
 }
 
+#define VERSION_STRING_PREFIX    L"Tianocore/EDK2 firmware version "
+
 /**
   Do the platform specific action after the console is ready
   Possible things that can be done in PlatformBootManagerAfterConsole:
@@ -524,19 +534,49 @@ PlatformBootManagerAfterConsole (
   VOID
   )
 {
-  EFI_STATUS      Status;
+  ESRT_MANAGEMENT_PROTOCOL      *EsrtManagement;
+  EFI_STATUS                    Status;
+  EFI_GRAPHICS_OUTPUT_PROTOCOL  *GraphicsOutput;
+  UINTN                         FirmwareVerLength;
+  UINTN                         PosX;
+  UINTN                         PosY;
+
+  FirmwareVerLength = StrLen (PcdGetPtr (PcdFirmwareVersionString));
 
   //
   // Show the splash screen.
   //
   Status = BootLogoEnableLogo ();
   if (EFI_ERROR (Status)) {
+    if (FirmwareVerLength > 0) {
+      Print (VERSION_STRING_PREFIX L"%s\n",
+        PcdGetPtr (PcdFirmwareVersionString));
+    }
     Print (L"Press ESCAPE for boot options ");
+  } else if (FirmwareVerLength > 0) {
+    Status = gBS->HandleProtocol (gST->ConsoleOutHandle,
+                    &gEfiGraphicsOutputProtocolGuid, (VOID **)&GraphicsOutput);
+    if (!EFI_ERROR (Status)) {
+      PosX = (GraphicsOutput->Mode->Info->HorizontalResolution -
+              (StrLen (VERSION_STRING_PREFIX) + FirmwareVerLength) *
+              EFI_GLYPH_WIDTH) / 2;
+      PosY = 0;
+
+      PrintXY (PosX, PosY, NULL, NULL, VERSION_STRING_PREFIX L"%s",
+        PcdGetPtr (PcdFirmwareVersionString));
+    }
   }
+
   //
   // Connect the rest of the devices.
   //
   EfiBootManagerConnectAll ();
+
+  Status = gBS->LocateProtocol (&gEsrtManagementProtocolGuid, NULL,
+                  (VOID **)&EsrtManagement);
+  if (!EFI_ERROR (Status)) {
+    EsrtManagement->SyncEsrtFmp ();
+  }
 
   if (GetBootModeHob() == BOOT_ON_FLASH_UPDATE) {
     DEBUG((DEBUG_INFO, "ProcessCapsules After EndOfDxe ......\n"));

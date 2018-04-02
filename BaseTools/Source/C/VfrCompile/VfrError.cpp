@@ -67,6 +67,7 @@ CVfrErrorHandle::CVfrErrorHandle (
   mScopeRecordListTail   = NULL;
   mVfrErrorHandleTable   = VFR_ERROR_HANDLE_TABLE;
   mVfrWarningHandleTable = VFR_WARNING_HANDLE_TABLE;
+  mWarningAsError        = FALSE;
 }
 
 CVfrErrorHandle::~CVfrErrorHandle (
@@ -76,7 +77,7 @@ CVfrErrorHandle::~CVfrErrorHandle (
   SVfrFileScopeRecord *pNode = NULL;
 
   if (mInputFileName != NULL) {
-    delete mInputFileName;
+    delete[] mInputFileName;
   }
 
   while (mScopeRecordListHead != NULL) {

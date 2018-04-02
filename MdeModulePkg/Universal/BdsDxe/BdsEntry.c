@@ -5,7 +5,7 @@
   After DxeCore finish DXE phase, gEfiBdsArchProtocolGuid->BdsEntry will be invoked
   to enter BDS phase.
 
-Copyright (c) 2004 - 2017, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2004 - 2018, Intel Corporation. All rights reserved.<BR>
 (C) Copyright 2016 Hewlett Packard Enterprise Development LP<BR>
 (C) Copyright 2015 Hewlett-Packard Development Company, L.P.<BR>
 This program and the accompanying materials
@@ -635,53 +635,51 @@ BdsFormalizeEfiGlobalVariable (
 }
 
 /**
+  Enter an infinite loop of calling the Boot Manager Menu.
 
-  Allocate a block of memory that will contain performance data to OS.
+  This is a last resort alternative to BdsEntry() giving up for good. This
+  function never returns.
 
+  @param[in] BootManagerMenu  The EFI_BOOT_MANAGER_LOAD_OPTION located and/or
+                              created by the EfiBootManagerGetBootManagerMenu()
+                              call in BdsEntry().
 **/
 VOID
-BdsAllocateMemoryForPerformanceData (
-  VOID
+BdsBootManagerMenuLoop (
+  IN EFI_BOOT_MANAGER_LOAD_OPTION *BootManagerMenu
   )
 {
-  EFI_STATUS                    Status;
-  EFI_PHYSICAL_ADDRESS          AcpiLowMemoryBase;
-  EDKII_VARIABLE_LOCK_PROTOCOL  *VariableLock;
-
-  AcpiLowMemoryBase = 0x0FFFFFFFFULL;
+  EFI_INPUT_KEY Key;
 
   //
-  // Allocate a block of memory that will contain performance data to OS.
+  // Normally BdsDxe does not print anything to the system console, but this is
+  // a last resort -- the end-user will likely not see any DEBUG messages
+  // logged in this situation.
   //
-  Status = gBS->AllocatePages (
-                  AllocateMaxAddress,
-                  EfiReservedMemoryType,
-                  EFI_SIZE_TO_PAGES (PERF_DATA_MAX_LENGTH),
-                  &AcpiLowMemoryBase
-                  );
-  if (!EFI_ERROR (Status)) {
+  // AsciiPrint() will NULL-check gST->ConOut internally. We check gST->ConIn
+  // here to see if it makes sense to request and wait for a keypress.
+  //
+  if (gST->ConIn != NULL) {
+    AsciiPrint (
+      "%a: No bootable option or device was found.\n"
+      "%a: Press any key to enter the Boot Manager Menu.\n",
+      gEfiCallerBaseName,
+      gEfiCallerBaseName
+      );
+    BdsWaitForSingleEvent (gST->ConIn->WaitForKey, 0);
+
     //
-    // Save the pointer to variable for use in S3 resume.
+    // Drain any queued keys.
     //
-    Status = BdsDxeSetVariableAndReportStatusCodeOnError (
-               L"PerfDataMemAddr",
-               &gPerformanceProtocolGuid,
-               EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
-               sizeof (EFI_PHYSICAL_ADDRESS),
-               &AcpiLowMemoryBase
-               );
-    if (EFI_ERROR (Status)) {
-      DEBUG ((EFI_D_ERROR, "[Bds] PerfDataMemAddr (%08x) cannot be saved to NV storage.\n", AcpiLowMemoryBase));
+    while (!EFI_ERROR (gST->ConIn->ReadKeyStroke (gST->ConIn, &Key))) {
+      //
+      // just throw away Key
+      //
     }
-    //
-    // Mark L"PerfDataMemAddr" variable to read-only if the Variable Lock protocol exists
-    // Still lock it even the variable cannot be saved to prevent it's set by 3rd party code.
-    //
-    Status = gBS->LocateProtocol (&gEdkiiVariableLockProtocolGuid, NULL, (VOID **) &VariableLock);
-    if (!EFI_ERROR (Status)) {
-      Status = VariableLock->RequestToLock (VariableLock, L"PerfDataMemAddr", &gPerformanceProtocolGuid);
-      ASSERT_EFI_ERROR (Status);
-    }
+  }
+
+  for (;;) {
+    EfiBootManagerBoot (BootManagerMenu);
   }
 }
 
@@ -730,10 +728,6 @@ BdsEntry (
   PERF_END (NULL, "DXE", NULL, 0);
   PERF_START (NULL, "BDS", NULL, 0);
   DEBUG ((EFI_D_INFO, "[Bds] Entry...\n"));
-
-  PERF_CODE (
-    BdsAllocateMemoryForPerformanceData ();
-  );
 
   //
   // Fill in FirmwareVendor and FirmwareRevision from PCDs
@@ -1088,14 +1082,17 @@ BdsEntry (
     } while (BootSuccess);
   }
 
-  if (BootManagerMenuStatus != EFI_NOT_FOUND) {
-    EfiBootManagerFreeLoadOption (&BootManagerMenu);
-  }
-
   if (!BootSuccess) {
     LoadOptions = EfiBootManagerGetLoadOptions (&LoadOptionCount, LoadOptionTypePlatformRecovery);
     ProcessLoadOptions (LoadOptions, LoadOptionCount);
     EfiBootManagerFreeLoadOptions (LoadOptions, LoadOptionCount);
+  }
+
+  //
+  // If BootManagerMenu is available, fall back to it indefinitely.
+  //
+  if (BootManagerMenuStatus != EFI_NOT_FOUND) {
+    BdsBootManagerMenuLoop (&BootManagerMenu);
   }
 
   DEBUG ((EFI_D_ERROR, "[Bds] Unable to boot!\n"));
@@ -1112,8 +1109,7 @@ BdsEntry (
   @param  VendorGuid             A unique identifier for the vendor.
   @param  Attributes             Attributes bitmask to set for the variable.
   @param  DataSize               The size in bytes of the Data buffer. Unless the EFI_VARIABLE_APPEND_WRITE, 
-                                 EFI_VARIABLE_AUTHENTICATED_WRITE_ACCESS, or 
-                                 EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS attribute is set, a size of zero 
+                                 or EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACCESS attribute is set, a size of zero
                                  causes the variable to be deleted. When the EFI_VARIABLE_APPEND_WRITE attribute is 
                                  set, then a SetVariable() call with a DataSize of zero will not cause any change to 
                                  the variable value (the timestamp associated with the variable may be updated however 
@@ -1131,9 +1127,8 @@ BdsEntry (
   @retval EFI_DEVICE_ERROR       The variable could not be retrieved due to a hardware error.
   @retval EFI_WRITE_PROTECTED    The variable in question is read-only.
   @retval EFI_WRITE_PROTECTED    The variable in question cannot be deleted.
-  @retval EFI_SECURITY_VIOLATION The variable could not be written due to EFI_VARIABLE_AUTHENTICATED_WRITE_ACCESS 
-                                 or EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACESS being set, but the AuthInfo 
-                                 does NOT pass the validation check carried out by the firmware.
+  @retval EFI_SECURITY_VIOLATION The variable could not be written due to EFI_VARIABLE_TIME_BASED_AUTHENTICATED_WRITE_ACESS
+                                 being set, but the AuthInfo does NOT pass the validation check carried out by the firmware.
 
   @retval EFI_NOT_FOUND          The variable trying to be updated or deleted was not found.
 **/

@@ -1081,7 +1081,7 @@ PciIoUnmap (
 
 /**
   Allocates pages that are suitable for an EfiPciIoOperationBusMasterCommonBuffer
-  mapping.
+  or EfiPciOperationBusMasterCommonBuffer64 mapping.
 
   @param  This                  A pointer to the EFI_PCI_IO_PROTOCOL instance.
   @param  Type                  This parameter is not used and must be ignored.
@@ -1094,7 +1094,7 @@ PciIoUnmap (
 
   @retval EFI_SUCCESS           The requested memory pages were allocated.
   @retval EFI_UNSUPPORTED       Attributes is unsupported. The only legal attribute bits are
-                                MEMORY_WRITE_COMBINE and MEMORY_CACHED.
+                                MEMORY_WRITE_COMBINE, MEMORY_CACHED and DUAL_ADDRESS_CYCLE.
   @retval EFI_INVALID_PARAMETER One or more parameters are invalid.
   @retval EFI_OUT_OF_RESOURCES  The memory pages could not be allocated.
 
@@ -1348,8 +1348,7 @@ ModifyRootBridgeAttributes (
   //
   Attributes &= ~(UINT64)(EFI_PCI_IO_ATTRIBUTE_EMBEDDED_DEVICE |
                           EFI_PCI_IO_ATTRIBUTE_EMBEDDED_ROM |
-                          EFI_PCI_IO_ATTRIBUTE_DUAL_ADDRESS_CYCLE |
-                          EFI_PCI_IO_ATTRIBUTE_BUS_MASTER);
+                          EFI_PCI_IO_ATTRIBUTE_DUAL_ADDRESS_CYCLE);
 
   //
   // Record the new attribute of the Root Bridge
@@ -1727,11 +1726,12 @@ PciIoAttributes (
   }
   //
   // The upstream bridge should be also set to revelant attribute
-  // expect for IO and Mem
+  // expect for IO, Mem and BusMaster
   //
   UpStreamAttributes = Attributes &
                        (~(EFI_PCI_IO_ATTRIBUTE_IO     |
-                          EFI_PCI_IO_ATTRIBUTE_MEMORY
+                          EFI_PCI_IO_ATTRIBUTE_MEMORY |
+                          EFI_PCI_IO_ATTRIBUTE_BUS_MASTER
                           )
                         );
   UpStreamBridge = PciIoDevice->Parent;
@@ -1812,10 +1812,14 @@ GetMmioAddressTranslationOffset (
     return (UINT64) -1;
   }
 
+  // According to UEFI 2.7, EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL::Configuration()
+  // returns host address instead of device address, while AddrTranslationOffset
+  // is not zero, and device address = host address + AddrTranslationOffset, so
+  // we convert host address to device address for range compare.
   while (Configuration->Desc == ACPI_ADDRESS_SPACE_DESCRIPTOR) {
     if ((Configuration->ResType == ACPI_ADDRESS_SPACE_TYPE_MEM) &&
-        (Configuration->AddrRangeMin <= AddrRangeMin) &&
-        (Configuration->AddrRangeMin + Configuration->AddrLen >= AddrRangeMin + AddrLen)
+        (Configuration->AddrRangeMin + Configuration->AddrTranslationOffset <= AddrRangeMin) &&
+        (Configuration->AddrRangeMin + Configuration->AddrLen + Configuration->AddrTranslationOffset >= AddrRangeMin + AddrLen)
         ) {
       return Configuration->AddrTranslationOffset;
     }
@@ -1968,6 +1972,10 @@ PciIoGetBarAttributes (
         return EFI_UNSUPPORTED;
       }
     }
+
+    // According to UEFI spec 2.7, we need return host address for
+    // PciIo->GetBarAttributes, and host address = device address - translation.
+    Descriptor->AddrRangeMin -= Descriptor->AddrTranslationOffset;
   }
 
   return EFI_SUCCESS;

@@ -40,6 +40,7 @@ VOID                  *mRuntimeSmbiosEntryPoint = NULL;
 EFI_PHYSICAL_ADDRESS  mReserveSmbiosEntryPoint = 0;
 EFI_PHYSICAL_ADDRESS  mStructureTableAddress   = 0;
 UINTN                 mStructureTablePages     = 0;
+BOOLEAN               mEndOfDxe                = FALSE;
 
 /**
   Do an AllocatePages () of type AllocateMaxAddress for EfiBootServicesCode
@@ -766,6 +767,26 @@ InstallSmbiosEventCallback (
 }
 
 /**
+  Callback function to toggle EndOfDxe status. NULL pointer detection needs
+  this status to decide if it's necessary to change attributes of page 0.
+
+  @param  Event            Event whose notification function is being invoked.
+  @param  Context          The pointer to the notification function's context,
+                           which is implementation-dependent.
+
+**/
+VOID
+EFIAPI
+ToggleEndOfDxeStatus (
+  IN EFI_EVENT                Event,
+  IN VOID                     *Context
+  )
+{
+  mEndOfDxe = TRUE;
+  return;
+}
+
+/**
   Install Driver to produce Legacy BIOS protocol.
 
   @param  ImageHandle  Handle of driver image.
@@ -802,6 +823,7 @@ LegacyBiosInstall (
   UINT64                             Length;
   UINT8                              *SecureBoot;
   EFI_EVENT                          InstallSmbiosEvent;
+  EFI_EVENT                          EndOfDxeEvent;
 
   //
   // Load this driver's image to memory
@@ -964,8 +986,10 @@ LegacyBiosInstall (
   // Initialize region from 0x0000 to 4k. This initializes interrupt vector
   // range.
   //
-  gBS->SetMem ((VOID *) ClearPtr, 0x400, INITIAL_VALUE_BELOW_1K);
-  ZeroMem ((VOID *) ((UINTN)ClearPtr + 0x400), 0xC00);
+  ACCESS_PAGE0_CODE (
+    gBS->SetMem ((VOID *) ClearPtr, 0x400, INITIAL_VALUE_BELOW_1K);
+    ZeroMem ((VOID *) ((UINTN)ClearPtr + 0x400), 0xC00);
+  );
 
   //
   // Allocate pages for OPROM usage
@@ -1104,12 +1128,15 @@ LegacyBiosInstall (
   //
   // Save Unexpected interrupt vector so can restore it just prior to boot
   //
-  BaseVectorMaster = (UINT32 *) (sizeof (UINT32) * PROTECTED_MODE_BASE_VECTOR_MASTER);
-  Private->BiosUnexpectedInt = BaseVectorMaster[0];
-  IntRedirCode = (UINT32) (UINTN) Private->IntThunk->InterruptRedirectionCode;
-  for (Index = 0; Index < 8; Index++) {
-    BaseVectorMaster[Index] = (EFI_SEGMENT (IntRedirCode + Index * 4) << 16) | EFI_OFFSET (IntRedirCode + Index * 4);
-  }
+  ACCESS_PAGE0_CODE (
+    BaseVectorMaster = (UINT32 *) (sizeof (UINT32) * PROTECTED_MODE_BASE_VECTOR_MASTER);
+    Private->BiosUnexpectedInt = BaseVectorMaster[0];
+    IntRedirCode = (UINT32) (UINTN) Private->IntThunk->InterruptRedirectionCode;
+    for (Index = 0; Index < 8; Index++) {
+      BaseVectorMaster[Index] = (EFI_SEGMENT (IntRedirCode + Index * 4) << 16) | EFI_OFFSET (IntRedirCode + Index * 4);
+    }
+  );
+
   //
   // Save EFI value
   //
@@ -1132,6 +1159,20 @@ LegacyBiosInstall (
                   &InstallSmbiosEvent
                   );
   ASSERT_EFI_ERROR (Status);  
+
+  //
+  // Create callback to update status of EndOfDxe, which is needed by NULL
+  // pointer detection
+  //
+  Status = gBS->CreateEventEx (
+                  EVT_NOTIFY_SIGNAL,
+                  TPL_NOTIFY,
+                  ToggleEndOfDxeStatus,
+                  NULL,
+                  &gEfiEndOfDxeEventGroupGuid,
+                  &EndOfDxeEvent
+                  );
+  ASSERT_EFI_ERROR (Status);
 
   //
   // Make a new handle and install the protocol

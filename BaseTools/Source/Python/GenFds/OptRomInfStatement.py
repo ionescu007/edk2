@@ -1,7 +1,7 @@
 ## @file
 # process OptionROM generation from INF statement
 #
-#  Copyright (c) 2007, Intel Corporation. All rights reserved.<BR>
+#  Copyright (c) 2007 - 2017, Intel Corporation. All rights reserved.<BR>
 #
 #  This program and the accompanying materials
 #  are licensed and made available under the terms and conditions of the BSD License
@@ -46,10 +46,10 @@ class OptRomInfStatement (FfsInfStatement):
     #
     def __GetOptRomParams(self):
         
-        if self.OverrideAttribs == None:
+        if self.OverrideAttribs is None:
             self.OverrideAttribs = OptionRom.OverrideAttribs()
 
-        if self.OverrideAttribs.NeedCompress == None:
+        if self.OverrideAttribs.NeedCompress is None:
             self.OverrideAttribs.NeedCompress = self.OptRomDefs.get ('PCI_COMPRESS')
             if self.OverrideAttribs.NeedCompress is not None:
                 if self.OverrideAttribs.NeedCompress.upper() not in ('TRUE', 'FALSE'):
@@ -57,16 +57,16 @@ class OptRomInfStatement (FfsInfStatement):
                 self.OverrideAttribs.NeedCompress = \
                     self.OverrideAttribs.NeedCompress.upper() == 'TRUE'
 
-        if self.OverrideAttribs.PciVendorId == None:
+        if self.OverrideAttribs.PciVendorId is None:
             self.OverrideAttribs.PciVendorId = self.OptRomDefs.get ('PCI_VENDOR_ID')
         
-        if self.OverrideAttribs.PciClassCode == None:
+        if self.OverrideAttribs.PciClassCode is None:
             self.OverrideAttribs.PciClassCode = self.OptRomDefs.get ('PCI_CLASS_CODE')
             
-        if self.OverrideAttribs.PciDeviceId == None:
+        if self.OverrideAttribs.PciDeviceId is None:
             self.OverrideAttribs.PciDeviceId = self.OptRomDefs.get ('PCI_DEVICE_ID')
             
-        if self.OverrideAttribs.PciRevision == None:
+        if self.OverrideAttribs.PciRevision is None:
             self.OverrideAttribs.PciRevision = self.OptRomDefs.get ('PCI_REVISION')
         
 #        InfObj = GenFdsGlobalVariable.WorkSpace.BuildObject[self.PathClassObj, self.CurrentArch]  
@@ -81,7 +81,7 @@ class OptRomInfStatement (FfsInfStatement):
     #   @param  self        The object pointer
     #   @retval string      Generated .efi file name
     #
-    def GenFfs(self):
+    def GenFfs(self, IsMakefile=False):
         #
         # Parse Inf file get Module related information
         #
@@ -98,13 +98,13 @@ class OptRomInfStatement (FfsInfStatement):
         # For the rule only has simpleFile
         #
         if isinstance (Rule, RuleSimpleFile.RuleSimpleFile) :
-            EfiOutputList = self.__GenSimpleFileSection__(Rule)
+            EfiOutputList = self.__GenSimpleFileSection__(Rule, IsMakefile=IsMakefile)
             return EfiOutputList
         #
         # For Rule has ComplexFile
         #
         elif isinstance(Rule, RuleComplexFile.RuleComplexFile):
-            EfiOutputList = self.__GenComplexFileSection__(Rule)
+            EfiOutputList = self.__GenComplexFileSection__(Rule, IsMakefile=IsMakefile)
             return EfiOutputList
 
     ## __GenSimpleFileSection__() method
@@ -115,13 +115,13 @@ class OptRomInfStatement (FfsInfStatement):
     #   @param  Rule        The rule object used to generate section
     #   @retval string      File name of the generated section file
     #
-    def __GenSimpleFileSection__(self, Rule):
+    def __GenSimpleFileSection__(self, Rule, IsMakefile = False):
         #
         # Prepare the parameter of GenSection
         #
 
         OutputFileList = []
-        if Rule.FileName != None:
+        if Rule.FileName is not None:
             GenSecInputFile = self.__ExtendMacro__(Rule.FileName)
             OutputFileList.append(GenSecInputFile)
         else:
@@ -138,12 +138,12 @@ class OptRomInfStatement (FfsInfStatement):
     #   @param  Rule        The rule object used to generate section
     #   @retval string      File name of the generated section file
     #
-    def __GenComplexFileSection__(self, Rule):
+    def __GenComplexFileSection__(self, Rule, IsMakefile=False):
 
         OutputFileList = []
         for Sect in Rule.SectionList:
             if Sect.SectionType == 'PE32':
-                if Sect.FileName != None:
+                if Sect.FileName is not None:
                     GenSecInputFile = self.__ExtendMacro__(Sect.FileName)
                     OutputFileList.append(GenSecInputFile)
                 else:

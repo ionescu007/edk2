@@ -2,7 +2,7 @@
   Interface routine for Mtftp4.
   
 (C) Copyright 2014 Hewlett-Packard Development Company, L.P.<BR>
-Copyright (c) 2006 - 2017, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2006 - 2018, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -366,6 +366,7 @@ Mtftp4Start (
   EFI_MTFTP4_CONFIG_DATA    *Config;
   EFI_TPL                   OldTpl;
   EFI_STATUS                Status;
+  EFI_STATUS                TokenStatus;
 
   //
   // Validate the parameters
@@ -393,7 +394,9 @@ Mtftp4Start (
 
   Instance = MTFTP4_PROTOCOL_FROM_THIS (This);
 
-  Status = EFI_SUCCESS;
+  Status      = EFI_SUCCESS;
+  TokenStatus = EFI_SUCCESS;
+  
   OldTpl = gBS->RaiseTPL (TPL_CALLBACK);
 
   if (Instance->State != MTFTP4_STATE_CONFIGED) {
@@ -402,6 +405,10 @@ Mtftp4Start (
 
   if (Instance->Operation != 0) {
     Status = EFI_ACCESS_DENIED;
+  }
+
+  if ((Token->OverrideData != NULL) && !Mtftp4OverrideValid (Instance, Token->OverrideData)) {
+    Status = EFI_INVALID_PARAMETER;
   }
 
   if (EFI_ERROR (Status)) {
@@ -416,11 +423,6 @@ Mtftp4Start (
   Instance->Operation = Operation;
   Override            = Token->OverrideData;
 
-  if ((Override != NULL) && !Mtftp4OverrideValid (Instance, Override)) {
-    Status = EFI_INVALID_PARAMETER;
-    goto ON_ERROR;
-  }
-
   if (Token->OptionCount != 0) {
     Status = Mtftp4ParseOption (
                Token->OptionList,
@@ -430,6 +432,7 @@ Mtftp4Start (
                );
 
     if (EFI_ERROR (Status)) {
+      TokenStatus = EFI_DEVICE_ERROR;
       goto ON_ERROR;
     }
   }
@@ -482,8 +485,8 @@ Mtftp4Start (
   // Config the unicast UDP child to send initial request
   //
   Status = Mtftp4ConfigUnicastPort (Instance->UnicastPort, Instance);
-
   if (EFI_ERROR (Status)) {
+    TokenStatus = EFI_DEVICE_ERROR;
     goto ON_ERROR;
   }
 
@@ -501,13 +504,13 @@ Mtftp4Start (
     Status = Mtftp4RrqStart (Instance, Operation);
   }
 
-  gBS->RestoreTPL (OldTpl);
-
   if (EFI_ERROR (Status)) {
+    TokenStatus = EFI_DEVICE_ERROR;
     goto ON_ERROR;
   }
 
   if (Token->Event != NULL) {
+    gBS->RestoreTPL (OldTpl);
     return EFI_SUCCESS;
   }
 
@@ -519,10 +522,11 @@ Mtftp4Start (
     This->Poll (This);
   }
 
+  gBS->RestoreTPL (OldTpl);
   return Token->Status;
 
 ON_ERROR:
-  Mtftp4CleanOperation (Instance, Status);
+  Mtftp4CleanOperation (Instance, TokenStatus);
   gBS->RestoreTPL (OldTpl);
 
   return Status;
@@ -1078,6 +1082,7 @@ EfiMtftp4Poll (
 {
   MTFTP4_PROTOCOL           *Instance;
   EFI_UDP4_PROTOCOL         *Udp;
+  EFI_STATUS                Status;
 
   if (This == NULL) {
     return EFI_INVALID_PARAMETER;
@@ -1092,7 +1097,9 @@ EfiMtftp4Poll (
   }
 
   Udp = Instance->UnicastPort->Protocol.Udp4;
-  return Udp->Poll (Udp);
+  Status = Udp->Poll (Udp);
+  Mtftp4OnTimerTick (NULL, Instance->Service);
+  return Status;
 }
 
 EFI_MTFTP4_PROTOCOL gMtftp4ProtocolTemplate = {

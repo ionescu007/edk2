@@ -3,7 +3,7 @@
 #
 # Provides drivers and definitions to create uefi payload for coreboot.
 #
-# Copyright (c) 2014 - 2016, Intel Corporation. All rights reserved.<BR>
+# Copyright (c) 2014 - 2017, Intel Corporation. All rights reserved.<BR>
 # This program and the accompanying materials are licensed and made available under
 # the terms and conditions of the BSD License that accompanies this distribution.
 # The full text of the license may be found at
@@ -239,6 +239,9 @@
   MemoryAllocationLib|MdePkg/Library/UefiMemoryAllocationLib/UefiMemoryAllocationLib.inf
   ExtractGuidedSectionLib|MdePkg/Library/DxeExtractGuidedSectionLib/DxeExtractGuidedSectionLib.inf
   ReportStatusCodeLib|MdeModulePkg/Library/DxeReportStatusCodeLib/DxeReportStatusCodeLib.inf
+!if $(SOURCE_DEBUG_ENABLE)
+  DebugAgentLib|SourceLevelDebugPkg/Library/DebugAgent/DxeDebugAgentLib.inf
+!endif
   CpuExceptionHandlerLib|UefiCpuPkg/Library/CpuExceptionHandlerLib/DxeCpuExceptionHandlerLib.inf
   MpInitLib|UefiCpuPkg/Library/MpInitLib/DxeMpInitLib.inf
 
@@ -515,11 +518,6 @@
 
 !if $(SHELL_TYPE) == BUILD_SHELL
 
-[PcdsFixedAtBuild]
-  ## This flag is used to control initialization of the shell library
-  #  This should be FALSE for compiling the shell application itself only.
-  gEfiShellPkgTokenSpaceGuid.PcdShellLibAutoInitialize|FALSE
-
   #
   # Shell Lib
   #
@@ -527,9 +525,27 @@
   BcfgCommandLib|ShellPkg/Library/UefiShellBcfgCommandLib/UefiShellBcfgCommandLib.inf
   DevicePathLib|MdePkg/Library/UefiDevicePathLib/UefiDevicePathLib.inf
   FileHandleLib|MdePkg/Library/UefiFileHandleLib/UefiFileHandleLib.inf
+  ShellLib|ShellPkg/Library/UefiShellLib/UefiShellLib.inf
+  NetLib|MdeModulePkg/Library/DxeNetLib/DxeNetLib.inf
 
 [Components.IA32]
+  ShellPkg/DynamicCommand/TftpDynamicCommand/TftpDynamicCommand.inf {
+    <PcdsFixedAtBuild>
+      ## This flag is used to control initialization of the shell library
+      #  This should be FALSE for compiling the dynamic command.
+      gEfiShellPkgTokenSpaceGuid.PcdShellLibAutoInitialize|FALSE
+  }
+  ShellPkg/DynamicCommand/DpDynamicCommand/DpDynamicCommand.inf {
+    <PcdsFixedAtBuild>
+      ## This flag is used to control initialization of the shell library
+      #  This should be FALSE for compiling the dynamic command.
+      gEfiShellPkgTokenSpaceGuid.PcdShellLibAutoInitialize|FALSE
+  }
   ShellPkg/Application/Shell/Shell.inf {
+    <PcdsFixedAtBuild>
+      ## This flag is used to control initialization of the shell library
+      #  This should be FALSE for compiling the shell application itself only.
+      gEfiShellPkgTokenSpaceGuid.PcdShellLibAutoInitialize|FALSE
 
     #------------------------------
     #  Basic commands
@@ -549,14 +565,6 @@
 
     <LibraryClasses>
       NULL|ShellPkg/Library/UefiShellNetwork1CommandsLib/UefiShellNetwork1CommandsLib.inf
-      NULL|ShellPkg/Library/UefiShellTftpCommandLib/UefiShellTftpCommandLib.inf
-
-    #------------------------------
-    #  Performance command
-    #------------------------------
-
-    <LibraryClasses>
-      NULL|ShellPkg/Library/UefiDpLib/UefiDpLib.inf
 
     #------------------------------
     #  Support libraries
@@ -565,13 +573,10 @@
     <LibraryClasses>
       DebugLib|MdePkg/Library/UefiDebugLibConOut/UefiDebugLibConOut.inf
       DevicePathLib|MdePkg/Library/UefiDevicePathLib/UefiDevicePathLib.inf
-      FileHandleLib|MdePkg/Library/UefiFileHandleLib/UefiFileHandleLib.inf
       HandleParsingLib|ShellPkg/Library/UefiHandleParsingLib/UefiHandleParsingLib.inf
-      NetLib|MdeModulePkg/Library/DxeNetLib/DxeNetLib.inf
       PcdLib|MdePkg/Library/DxePcdLib/DxePcdLib.inf
       ShellCEntryLib|ShellPkg/Library/UefiShellCEntryLib/UefiShellCEntryLib.inf
       ShellCommandLib|ShellPkg/Library/UefiShellCommandLib/UefiShellCommandLib.inf
-      ShellLib|ShellPkg/Library/UefiShellLib/UefiShellLib.inf
       SortLib|MdeModulePkg/Library/UefiSortLib/UefiSortLib.inf
   }
 

@@ -2,7 +2,7 @@
   IpIo Library.
 
 (C) Copyright 2014 Hewlett-Packard Development Company, L.P.<BR>
-Copyright (c) 2005 - 2016, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2005 - 2018, Intel Corporation. All rights reserved.<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
 which accompanies this distribution.  The full text of the license may be found at
@@ -129,6 +129,7 @@ IpIoTransmitHandler (
 
   @retval       EFI_SUCCESS        The IP child is created and the IP protocol
                                    interface is retrieved.
+  @retval       EFI_UNSUPPORTED    Upsupported IpVersion.
   @retval       Others             The required operation failed.
 
 **/
@@ -206,6 +207,7 @@ IpIoCreateIpChildOpenProtocol (
 
   @retval     EFI_SUCCESS         The IP protocol is closed and the relevant IP child
                                   is destroyed.
+  @retval     EFI_UNSUPPORTED     Upsupported IpVersion.
   @retval     Others              The required operation failed.
 
 **/
@@ -234,24 +236,25 @@ IpIoCloseProtocolDestroyIpChild (
   //
   // Close the previously openned IP protocol.
   //
-  gBS->CloseProtocol (
-         ChildHandle,
-         IpProtocolGuid,
-         ImageHandle,
-         ControllerHandle
-         );
+  Status = gBS->CloseProtocol (
+                  ChildHandle,
+                  IpProtocolGuid,
+                  ImageHandle,
+                  ControllerHandle
+                  );
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
 
   //
   // Destroy the IP child.
   //
-  Status = NetLibDestroyServiceChild (
-             ControllerHandle,
-             ImageHandle,
-             ServiceBindingGuid,
-             ChildHandle
-             );
-
-  return Status;
+  return NetLibDestroyServiceChild (
+           ControllerHandle,
+           ImageHandle,
+           ServiceBindingGuid,
+           ChildHandle
+           );
 }
 
 /**
@@ -280,15 +283,22 @@ IpIoIcmpv4Handler (
   UINT8                Type;
   UINT8                Code;
   UINT32               TrimBytes;
-
+  
+  ASSERT (IpIo != NULL);
+  ASSERT (Pkt != NULL);
+  ASSERT (Session != NULL);
   ASSERT (IpIo->IpVersion == IP_VERSION_4);
-
-  IcmpHdr = NET_PROTO_HDR (Pkt, IP4_ICMP_ERROR_HEAD);
-  IpHdr   = (EFI_IP4_HEADER *) (&IcmpHdr->IpHead);
-
+  
   //
   // Check the ICMP packet length.
   //
+  if (Pkt->TotalSize < sizeof (IP4_ICMP_ERROR_HEAD)) {
+    return EFI_ABORTED;
+  }
+  
+  IcmpHdr = NET_PROTO_HDR (Pkt, IP4_ICMP_ERROR_HEAD);
+  IpHdr   = (EFI_IP4_HEADER *) (&IcmpHdr->IpHead);
+
   if (Pkt->TotalSize < ICMP_ERRLEN (IpHdr)) {
 
     return EFI_ABORTED;
@@ -377,8 +387,14 @@ IpIoIcmpv4Handler (
   TrimBytes  = (UINT32) (PayLoadHdr - (UINT8 *) IcmpHdr);
 
   NetbufTrim (Pkt, TrimBytes, TRUE);
-
-  IpIo->PktRcvdNotify (EFI_ICMP_ERROR, IcmpErr, Session, Pkt, IpIo->RcvdContext);
+  
+  //
+  // If the input packet has invalid format, and TrimBytes is larger than 
+  // the packet size, the NetbufTrim might trim the packet to zero.
+  //
+  if (Pkt->TotalSize != 0) {
+    IpIo->PktRcvdNotify (EFI_ICMP_ERROR, IcmpErr, Session, Pkt, IpIo->RcvdContext);
+  }
 
   return EFI_SUCCESS;  
 }
@@ -412,6 +428,9 @@ IpIoIcmpv6Handler (
   UINT32               TrimBytes;
   BOOLEAN              Flag;
 
+  ASSERT (IpIo != NULL);
+  ASSERT (Pkt != NULL);
+  ASSERT (Session != NULL);
   ASSERT (IpIo->IpVersion == IP_VERSION_6);
 
   //
@@ -539,7 +558,13 @@ IpIoIcmpv6Handler (
   
   NetbufTrim (Pkt, TrimBytes, TRUE);
 
-  IpIo->PktRcvdNotify (EFI_ICMP_ERROR, IcmpErr, Session, Pkt, IpIo->RcvdContext);
+  //
+  // If the input packet has invalid format, and TrimBytes is larger than 
+  // the packet size, the NetbufTrim might trim the packet to zero.
+  //
+  if (Pkt->TotalSize != 0) {
+    IpIo->PktRcvdNotify (EFI_ICMP_ERROR, IcmpErr, Session, Pkt, IpIo->RcvdContext);
+  }
 
   return EFI_SUCCESS;
 }
@@ -609,8 +634,8 @@ IpIoExtFree (
   @param[in]       Dest                 Pointer to the destination IP address.
   @param[in]       Override             Pointer to the overriden IP_IO data.
 
-  @return Pointer to the data structure created to wrap the packet. If NULL,
-  @return resource limit occurred.
+  @return Pointer to the data structure created to wrap the packet. If any error occurs, 
+          then return NULL.
 
 **/
 IP_IO_SEND_ENTRY *
@@ -1014,12 +1039,22 @@ IpIoListenHandlerDpc (
     return;
   }
 
-  if (((EFI_SUCCESS != Status) && (EFI_ICMP_ERROR != Status)) || (NULL == RxData)) {
+  if ((EFI_SUCCESS != Status) && (EFI_ICMP_ERROR != Status)) {
     //
-    // @bug Only process the normal packets and the icmp error packets, if RxData is NULL
-    // @bug with Status == EFI_SUCCESS or EFI_ICMP_ERROR, just resume the receive although
-    // @bug this should be a bug of the low layer (IP).
+    // Only process the normal packets and the icmp error packets.
     //
+    if (RxData != NULL) {
+      goto CleanUp;
+    } else {
+      goto Resume;
+    }
+  }
+
+  //
+  // if RxData is NULL with Status == EFI_SUCCESS or EFI_ICMP_ERROR, this should be a code issue in the low layer (IP).
+  //
+  ASSERT (RxData != NULL);
+  if (RxData == NULL) {
     goto Resume;
   }
 
@@ -1028,6 +1063,7 @@ IpIoListenHandlerDpc (
   }
 
   if (IpIo->IpVersion == IP_VERSION_4) {
+    ASSERT (RxData->Ip4RxData.Header != NULL);
     if (IP4_IS_LOCAL_BROADCAST (EFI_IP4 (RxData->Ip4RxData.Header->SourceAddress))) {
       //
       // The source address is a broadcast address, discard it.
@@ -1039,7 +1075,7 @@ IpIoListenHandlerDpc (
         IP4_NET_EQUAL (IpIo->StationIp, EFI_NTOHL (((EFI_IP4_RECEIVE_DATA *) RxData)->Header->SourceAddress), IpIo->SubnetMask) &&
         !NetIp4IsUnicast (EFI_NTOHL (((EFI_IP4_RECEIVE_DATA *) RxData)->Header->SourceAddress), IpIo->SubnetMask)) {
       //
-      // The source address is not zero and it's not a unicast IP address, discard it.
+      // The source address doesn't match StationIp and it's not a unicast IP address, discard it.
       //
       goto CleanUp;
     }
@@ -1050,6 +1086,11 @@ IpIoListenHandlerDpc (
       //
       goto CleanUp;
     }
+
+    //
+    // The fragment should always be valid for non-zero length packet.
+    //
+    ASSERT (RxData->Ip4RxData.FragmentCount != 0);
 
     //
     // Create a netbuffer representing IPv4 packet
@@ -1075,7 +1116,7 @@ IpIoListenHandlerDpc (
     Session.IpHdrLen       = RxData->Ip4RxData.HeaderLength;
     Session.IpVersion      = IP_VERSION_4;
   } else {
-
+    ASSERT (RxData->Ip6RxData.Header != NULL);
     if (!NetIp6IsValidUnicast(&RxData->Ip6RxData.Header->SourceAddress)) {
       goto CleanUp;
     }
@@ -1086,6 +1127,11 @@ IpIoListenHandlerDpc (
       //
       goto CleanUp;
     }
+    
+    //
+    // The fragment should always be valid for non-zero length packet.
+    //
+    ASSERT (RxData->Ip6RxData.FragmentCount != 0);
     
     //
     // Create a netbuffer representing IPv6 packet
@@ -1175,6 +1221,8 @@ IpIoListenHandler (
 
 /**
   Create a new IP_IO instance.
+
+  If IpVersion is not IP_VERSION_4 or IP_VERSION_6, then ASSERT().
   
   This function uses IP4/IP6 service binding protocol in Controller to create
   an IP4/IP6 child (aka IP4/IP6 instance).
@@ -1240,7 +1288,7 @@ IpIoCreate (
              Image,
              &IpIo->ChildHandle,
              IpVersion,             
-             (VOID **)&(IpIo->Ip)
+             (VOID **) & (IpIo->Ip)
              );
   if (EFI_ERROR (Status)) {
     goto ReleaseIpIo;
@@ -1262,7 +1310,9 @@ ReleaseIpIo:
 
 /**
   Open an IP_IO instance for use.
-  
+
+  If Ip version is not IP_VERSION_4 or IP_VERSION_6, then ASSERT().
+
   This function is called after IpIoCreate(). It is used for configuring the IP
   instance and register the callbacks and their context data for sending and
   receiving IP packets.
@@ -1272,11 +1322,13 @@ ReleaseIpIo:
   @param[in]       OpenData           The configuration data and callbacks for
                                       the IP_IO instance.
 
-  @retval          EFI_SUCCESS        The IP_IO instance opened with OpenData
-                                      successfully.
-  @retval          EFI_ACCESS_DENIED  The IP_IO instance is configured, avoid to 
-                                      reopen it.
-  @retval          Others             Error condition occurred.
+  @retval          EFI_SUCCESS            The IP_IO instance opened with OpenData
+                                          successfully.
+  @retval          EFI_ACCESS_DENIED      The IP_IO instance is configured, avoid to 
+                                          reopen it.
+  @retval          EFI_UNSUPPORTED        IPv4 RawData mode is no supported.
+  @retval          EFI_INVALID_PARAMETER  Invalid input parameter.
+  @retval          Others                 Error condition occurred.
 
 **/
 EFI_STATUS
@@ -1288,6 +1340,10 @@ IpIoOpen (
 {
   EFI_STATUS        Status;
   UINT8             IpVersion;
+
+  if (IpIo == NULL || OpenData == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
 
   if (IpIo->IsConfigured) {
     return EFI_ACCESS_DENIED;
@@ -1367,7 +1423,7 @@ IpIoOpen (
                              );
     if (EFI_ERROR (Status)) {
       IpIo->Ip.Ip4->Configure (IpIo->Ip.Ip4, NULL);
-      goto ErrorExit;
+      return Status;
     }
 
   } else {
@@ -1379,14 +1435,12 @@ IpIoOpen (
                              );
     if (EFI_ERROR (Status)) {
       IpIo->Ip.Ip6->Configure (IpIo->Ip.Ip6, NULL);
-      goto ErrorExit;
+      return Status;
     }
   }
 
   IpIo->IsConfigured = TRUE;
   InsertTailList (&mActiveIpIoList, &IpIo->Entry);
-
-ErrorExit:
 
   return Status;
 }
@@ -1394,14 +1448,17 @@ ErrorExit:
 
 /**
   Stop an IP_IO instance.
+
+  If Ip version is not IP_VERSION_4 or IP_VERSION_6, then ASSERT().
   
   This function is paired with IpIoOpen(). The IP_IO will be unconfigured and all
   the pending send/receive tokens will be canceled.
 
   @param[in, out]  IpIo            Pointer to the IP_IO instance that needs to stop.
 
-  @retval          EFI_SUCCESS     The IP_IO instance stopped successfully.
-  @retval          Others          Error condition occurred.
+  @retval          EFI_SUCCESS            The IP_IO instance stopped successfully.
+  @retval          EFI_INVALID_PARAMETER  Invalid input parameter.
+  @retval          Others                 Error condition occurred.
 
 **/
 EFI_STATUS
@@ -1413,6 +1470,10 @@ IpIoStop (
   EFI_STATUS        Status;
   IP_IO_IP_INFO     *IpInfo;
   UINT8             IpVersion;
+
+  if (IpIo == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
 
   if (!IpIo->IsConfigured) {
     return EFI_SUCCESS;
@@ -1488,20 +1549,28 @@ IpIoDestroy (
   IN OUT IP_IO *IpIo
   )
 {
+  EFI_STATUS    Status;
+  
   //
   // Stop the IpIo.
   //
-  IpIoStop (IpIo);
+  Status = IpIoStop (IpIo);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
 
   //
   // Close the IP protocol and destroy the child.
   //
-  IpIoCloseProtocolDestroyIpChild (
-    IpIo->Controller,
-    IpIo->Image,
-    IpIo->ChildHandle,
-    IpIo->IpVersion
-    );
+  Status = IpIoCloseProtocolDestroyIpChild (
+             IpIo->Controller,
+             IpIo->Image,
+             IpIo->ChildHandle,
+             IpIo->IpVersion
+             );
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
 
   gBS->FreePool (IpIo);
 
@@ -1512,7 +1581,7 @@ IpIoDestroy (
 /**
   Send out an IP packet.
   
-  This function is called after IpIoOpen(). The data to be sent are wrapped in
+  This function is called after IpIoOpen(). The data to be sent is wrapped in
   Pkt. The IP instance wrapped in IpIo is used for sending by default but can be
   overriden by Sender. Other sending configs, like source address and gateway
   address etc., are specified in OverrideData.
@@ -1524,12 +1593,15 @@ IpIoDestroy (
   @param[in]       Context               Optional context data.
   @param[in]       NotifyData            Optional notify data.
   @param[in]       Dest                  The destination IP address to send this packet to.
+                                         This parameter is optional when using IPv6.
   @param[in]       OverrideData          The data to override some configuration of the IP
                                          instance used for sending.
 
   @retval          EFI_SUCCESS           The operation is completed successfully.
+  @retval          EFI_INVALID_PARAMETER The input parameter is not correct.
   @retval          EFI_NOT_STARTED       The IpIo is not configured.
   @retval          EFI_OUT_OF_RESOURCES  Failed due to resource limit.
+  @retval          Others                Error condition occurred.
 
 **/
 EFI_STATUS
@@ -1540,7 +1612,7 @@ IpIoSend (
   IN     IP_IO_IP_INFO  *Sender        OPTIONAL,
   IN     VOID           *Context       OPTIONAL,
   IN     VOID           *NotifyData    OPTIONAL,
-  IN     EFI_IP_ADDRESS *Dest,
+  IN     EFI_IP_ADDRESS *Dest          OPTIONAL,
   IN     IP_IO_OVERRIDE *OverrideData  OPTIONAL
   )
 {
@@ -1548,7 +1620,13 @@ IpIoSend (
   IP_IO_IP_PROTOCOL Ip;
   IP_IO_SEND_ENTRY  *SndEntry;
 
-  ASSERT ((IpIo->IpVersion != IP_VERSION_4) || (Dest != NULL));
+  if ((IpIo == NULL) || (Pkt == NULL)) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  if ((IpIo->IpVersion == IP_VERSION_4) && (Dest == NULL)) {
+    return EFI_INVALID_PARAMETER;
+  }
 
   if (!IpIo->IsConfigured) {
     return EFI_NOT_STARTED;
@@ -1589,6 +1667,9 @@ IpIoSend (
 
 /**
   Cancel the IP transmit token which wraps this Packet.
+
+  If IpIo is NULL, then ASSERT().
+  If Packet is NULL, then ASSERT().
 
   @param[in]  IpIo                  Pointer to the IP_IO instance.
   @param[in]  Packet                Pointer to the packet of NET_BUF to cancel.
@@ -1636,6 +1717,9 @@ IpIoCancelTxToken (
 
 /**
   Add a new IP instance for sending data.
+
+  If IpIo is NULL, then ASSERT().
+  If Ip version is not IP_VERSION_4 or IP_VERSION_6, then ASSERT().
   
   The function is used to add the IP_IO to the IP_IO sending list. The caller
   can later use IpIoFindSender() to get the IP_IO and call IpIoSend() to send
@@ -1658,6 +1742,7 @@ IpIoAddIp (
   EFI_EVENT      Event;
 
   ASSERT (IpIo != NULL);
+  ASSERT ((IpIo->IpVersion == IP_VERSION_4) || (IpIo->IpVersion == IP_VERSION_6));
 
   IpInfo = AllocatePool (sizeof (IP_IO_IP_INFO));
   if (IpInfo == NULL) {
@@ -1738,6 +1823,9 @@ ReleaseIpInfo:
   Configure the IP instance of this IpInfo and start the receiving if IpConfigData
   is not NULL.
 
+  If IpInfo is NULL, then ASSERT().
+  If Ip version is not IP_VERSION_4 or IP_VERSION_6, then ASSERT().
+
   @param[in, out]  IpInfo          Pointer to the IP_IO_IP_INFO instance.
   @param[in, out]  IpConfigData    The IP configure data used to configure the IP
                                    instance, if NULL the IP instance is reset. If
@@ -1787,23 +1875,27 @@ IpIoConfigIp (
   }
 
   if (EFI_ERROR (Status)) {
-    goto OnExit;
+    return Status;
   }
 
   if (IpConfigData != NULL) {
-    if (IpInfo->IpVersion == IP_VERSION_4){
+    if (IpInfo->IpVersion == IP_VERSION_4) {
 
       if (((EFI_IP4_CONFIG_DATA *) IpConfigData)->UseDefaultAddress) {
-        Ip.Ip4->GetModeData (
-                  Ip.Ip4, 
-                  &Ip4ModeData, 
-                  NULL, 
-                  NULL
-                  );
+        Status = Ip.Ip4->GetModeData (
+                           Ip.Ip4, 
+                           &Ip4ModeData, 
+                           NULL, 
+                           NULL
+                           );
+        if (EFI_ERROR (Status)) {
+          Ip.Ip4->Configure (Ip.Ip4, NULL);
+          return Status;
+        }
 
         IP4_COPY_ADDRESS (&((EFI_IP4_CONFIG_DATA*) IpConfigData)->StationAddress, &Ip4ModeData.ConfigData.StationAddress);
         IP4_COPY_ADDRESS (&((EFI_IP4_CONFIG_DATA*) IpConfigData)->SubnetMask, &Ip4ModeData.ConfigData.SubnetMask);
-    }
+      }
 
       CopyMem (
         &IpInfo->Addr.Addr, 
@@ -1820,16 +1912,20 @@ IpIoConfigIp (
                          Ip.Ip4,
                          &IpInfo->DummyRcvToken.Ip4Token
                          );
-    if (EFI_ERROR (Status)) {
-      Ip.Ip4->Configure (Ip.Ip4, NULL);
-    }
-  } else {
-    Ip.Ip6->GetModeData (
-              Ip.Ip6,
-              &Ip6ModeData,
-              NULL,
-              NULL
-              );
+      if (EFI_ERROR (Status)) {
+        Ip.Ip4->Configure (Ip.Ip4, NULL);
+      }
+    } else {
+      Status = Ip.Ip6->GetModeData (
+                         Ip.Ip6,
+                         &Ip6ModeData,
+                         NULL,
+                         NULL
+                         );
+      if (EFI_ERROR (Status)) {
+        Ip.Ip6->Configure (Ip.Ip6, NULL);
+        return Status;
+      }
 
       if (Ip6ModeData.IsConfigured) {
         CopyMem (
@@ -1864,7 +1960,7 @@ IpIoConfigIp (
 
       } else {
         Status = EFI_NO_MAPPING;
-        goto OnExit;
+        return Status;
       } 
 
       CopyMem (
@@ -1889,8 +1985,6 @@ IpIoConfigIp (
     ZeroMem (&IpInfo->PreMask, sizeof (IpInfo->PreMask));
   }
 
-OnExit:
-
   return Status;
 }
 
@@ -1898,6 +1992,8 @@ OnExit:
 /**
   Destroy an IP instance maintained in IpIo->IpList for
   sending purpose.
+
+  If Ip version is not IP_VERSION_4 or IP_VERSION_6, then ASSERT().
   
   This function pairs with IpIoAddIp(). The IpInfo is previously created by
   IpIoAddIp(). The IP_IO_IP_INFO::RefCnt is decremented and the IP instance
@@ -1916,6 +2012,10 @@ IpIoRemoveIp (
 {
 
   UINT8               IpVersion;
+  
+  if (IpIo == NULL || IpInfo == NULL) {
+    return;
+  }
 
   ASSERT (IpInfo->RefCnt > 0);
 
@@ -1980,7 +2080,7 @@ IpIoRemoveIp (
   @param[in]       Src               The local IP address.
 
   @return Pointer to the IP protocol can be used for sending purpose and its local
-          address is the same with Src.
+          address is the same with Src. NULL if failed.
 
 **/
 IP_IO_IP_INFO *
@@ -1996,7 +2096,13 @@ IpIoFindSender (
   LIST_ENTRY      *IpInfoEntry;
   IP_IO_IP_INFO   *IpInfo;
 
-  ASSERT ((IpVersion == IP_VERSION_4) || (IpVersion == IP_VERSION_6));  
+  if (IpIo == NULL || Src == NULL) {
+    return NULL;
+  }
+
+  if ((IpVersion != IP_VERSION_4) && (IpVersion != IP_VERSION_6)) {
+    return NULL;
+  }
 
   NET_LIST_FOR_EACH (IpIoEntry, &mActiveIpIoList) {
     IpIoPtr = NET_LIST_USER_STRUCT (IpIoEntry, IP_IO, Entry);
@@ -2020,8 +2126,7 @@ IpIoFindSender (
           *IpIo = IpIoPtr;
           return IpInfo;       
         }
-      }      
-
+      }
     }
   }
 
@@ -2044,6 +2149,7 @@ IpIoFindSender (
   @param[out]  IsHard                If TRUE, indicates that it is a hard error.
   @param[out]  Notify                If TRUE, SockError needs to be notified.
 
+  @retval EFI_UNSUPPORTED            Unrecognizable ICMP error code.
   @return ICMP Error Status, such as EFI_NETWORK_UNREACHABLE.
 
 **/
@@ -2162,10 +2268,12 @@ IpIoGetIcmpErrStatus (
   @retval      EFI_INVALID_PARAMETER Neighbor Address is invalid.
   @retval      EFI_NOT_FOUND         The neighbor cache entry is not in the 
                                      neighbor table.  
+  @retval      EFI_UNSUPPORTED       IP version is IPv4, which doesn't support neighbor cache refresh.
   @retval      EFI_OUT_OF_RESOURCES  Failed due to resource limit.
 
 **/
 EFI_STATUS
+EFIAPI
 IpIoRefreshNeighbor (
   IN IP_IO           *IpIo,
   IN EFI_IP_ADDRESS  *Neighbor,
@@ -2174,8 +2282,12 @@ IpIoRefreshNeighbor (
 {
   EFI_IP6_PROTOCOL  *Ip;
 
-  if (!IpIo->IsConfigured || IpIo->IpVersion != IP_VERSION_6) {
+  if (!IpIo->IsConfigured) {
     return EFI_NOT_STARTED;
+  }
+
+  if (IpIo->IpVersion != IP_VERSION_6) {
+    return EFI_UNSUPPORTED;
   }
 
   Ip = IpIo->Ip.Ip6;

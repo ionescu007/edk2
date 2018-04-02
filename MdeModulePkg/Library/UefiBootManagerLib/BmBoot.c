@@ -1,7 +1,7 @@
 /** @file
   Library functions which relates with booting.
 
-Copyright (c) 2011 - 2017, Intel Corporation. All rights reserved.<BR>
+Copyright (c) 2011 - 2018, Intel Corporation. All rights reserved.<BR>
 (C) Copyright 2015-2016 Hewlett Packard Enterprise Development LP<BR>
 This program and the accompanying materials
 are licensed and made available under the terms and conditions of the BSD License
@@ -26,6 +26,29 @@ EFI_BOOT_MANAGER_LEGACY_BOOT                 mBmLegacyBoot              = NULL;
 ///
 EFI_GUID mBmHardDriveBootVariableGuid = { 0xfab7e9e1, 0x39dd, 0x4f2b, { 0x84, 0x08, 0xe2, 0x0e, 0x90, 0x6c, 0xb6, 0xde } };
 EFI_GUID mBmAutoCreateBootOptionGuid  = { 0x8108ac4e, 0x9f11, 0x4d59, { 0x85, 0x0e, 0xe2, 0x1a, 0x52, 0x2c, 0x59, 0xb2 } };
+
+/**
+
+  End Perf entry of BDS
+
+  @param  Event                 The triggered event.
+  @param  Context               Context for this event.
+
+**/
+VOID
+EFIAPI
+BmEndOfBdsPerfCode (
+  IN EFI_EVENT  Event,
+  IN VOID       *Context
+  )
+{
+  //
+  // Record the performance data for End of BDS
+  //
+  PERF_END(NULL, "BDS", NULL, 0);
+
+  return ;
+}
 
 /**
   The function registers the legacy boot support capabilities.
@@ -1119,6 +1142,14 @@ BmMatchHttpBootDevicePath (
         return FALSE;
       }
 
+      if (DevicePathSubType (Left) == MSG_DNS_DP) {
+        Left = NextDevicePathNode (Left);
+      }
+
+      if (DevicePathSubType (Right) == MSG_DNS_DP) {
+        Right = NextDevicePathNode (Right);
+      }
+
       if (((DevicePathSubType (Left) != MSG_IPv4_DP) || (DevicePathSubType (Right) != MSG_IPv4_DP)) &&
           ((DevicePathSubType (Left) != MSG_IPv6_DP) || (DevicePathSubType (Right) != MSG_IPv6_DP)) &&
           ((DevicePathSubType (Left) != MSG_URI_DP)  || (DevicePathSubType (Right) != MSG_URI_DP))
@@ -1736,7 +1767,7 @@ EfiBootManagerBoot (
     //
     // 4. Repair system through DriverHealth protocol
     //
-    BmRepairAllControllers ();
+    BmRepairAllControllers (0);
   }
 
   PERF_START_EX (gImageHandle, "BdsAttempt", NULL, 0, (UINT32) OptionNumber);
@@ -1822,7 +1853,7 @@ EfiBootManagerBoot (
         //
         Status = EfiCreateEventLegacyBootEx(
                    TPL_NOTIFY,
-                   BmWriteBootToOsPerformanceData,
+                   BmEndOfBdsPerfCode,
                    NULL, 
                    &LegacyBootEvent
                    );
@@ -1863,7 +1894,7 @@ EfiBootManagerBoot (
   // Write boot to OS performance data for UEFI boot
   //
   PERF_CODE (
-    BmWriteBootToOsPerformanceData (NULL, NULL);
+    BmEndOfBdsPerfCode (NULL, NULL);
   );
 
   REPORT_STATUS_CODE (EFI_PROGRESS_CODE, PcdGet32 (PcdProgressCodeOsLoaderStart));

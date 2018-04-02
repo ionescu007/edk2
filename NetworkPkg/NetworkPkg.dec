@@ -3,7 +3,7 @@
 #
 # This package provides network modules that conform to UEFI 2.4 specification.
 #
-# Copyright (c) 2009 - 2017, Intel Corporation. All rights reserved.<BR>
+# Copyright (c) 2009 - 2018, Intel Corporation. All rights reserved.<BR>
 # (C) Copyright 2015-2017 Hewlett Packard Enterprise Development LP<BR>
 #
 # This program and the accompanying materials are licensed and made available under
@@ -20,7 +20,7 @@
   DEC_SPECIFICATION              = 0x00010005
   PACKAGE_NAME                   = NetworkPkg
   PACKAGE_GUID                   = 947988BE-8D5C-471a-893D-AD181C46BEBB
-  PACKAGE_VERSION                = 0.97
+  PACKAGE_VERSION                = 0.98
   PACKAGE_UNI_FILE               = NetworkPkg.uni
 
 [Includes]
@@ -45,6 +45,9 @@
   
   # Include/Guid/TlsAuthentication.h
   gEfiTlsCaCertificateGuid      = { 0xfd2340D0, 0x3dab, 0x4349, { 0xa6, 0xc7, 0x3b, 0x4f, 0x12, 0xb4, 0x8e, 0xae }}
+
+  # Include/Guid/HttpTlsCipherList.h
+  gEdkiiHttpTlsCipherListGuid   = { 0x46ddb415, 0x5244, 0x49c7, { 0x93, 0x74, 0xf0, 0xe2, 0x98, 0xe7, 0xd3, 0x86 }}
 
 [PcdsFixedAtBuild]
   ## The max attempt number will be created by iSCSI driver.

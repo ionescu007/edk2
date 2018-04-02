@@ -53,7 +53,7 @@ class ToolDefClassObject(object):
         for Env in os.environ:
             self.MacroDictionary["ENV(%s)" % Env] = os.environ[Env]
 
-        if FileName != None:
+        if FileName is not None:
             self.LoadToolDefFile(FileName)
 
     ## LoadToolDefFile
@@ -246,7 +246,6 @@ class ToolDefClassObject(object):
                     Value = Value.replace(Ref, self.MacroDictionary[Ref])
                 else:
                     Value = Value.replace(Ref, self.MacroDictionary[Ref.upper()])
-
         MacroReference = gMacroRefPattern.findall(Value)
         for Ref in MacroReference:
             if Ref not in self.MacroDictionary:

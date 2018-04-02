@@ -44,11 +44,11 @@ def GenerateHelpText(Text, Lang):
 class CommonClass(object):
     def __init__(self, Usage = None, FeatureFlag = '', SupArchList = None, HelpText = ''):
         self.Usage = Usage
-        if self.Usage == None:
+        if self.Usage is None:
             self.Usage = []
         self.FeatureFlag = FeatureFlag
         self.SupArchList = SupArchList
-        if self.SupArchList == None:
+        if self.SupArchList is None:
             self.SupArchList = []
         self.HelpText = HelpText
         self.HelpTextList = []
@@ -270,19 +270,22 @@ class PpiClass(GuidProtocolPpiCommonClass):
 #
 class SkuInfoClass(object):
     def __init__(self, SkuIdName = '', SkuId = '', VariableName = '', VariableGuid = '', VariableOffset = '', 
-                 HiiDefaultValue = '', VpdOffset = '', DefaultValue = '', VariableGuidValue = '', VariableAttribute = ''):
+                 HiiDefaultValue = '', VpdOffset = '', DefaultValue = '', VariableGuidValue = '', VariableAttribute = '', DefaultStore = None):
         self.SkuIdName = SkuIdName
         self.SkuId = SkuId
         
         #
         # Used by Hii
         #
+        if DefaultStore is None:
+            DefaultStore = {}
         self.VariableName = VariableName
         self.VariableGuid = VariableGuid
         self.VariableGuidValue = VariableGuidValue
         self.VariableOffset = VariableOffset
         self.HiiDefaultValue = HiiDefaultValue
         self.VariableAttribute = VariableAttribute
+        self.DefaultStoreDict = DefaultStore
         
         #
         # Used by Vpd
@@ -372,13 +375,13 @@ class PcdClass(CommonClass):
         self.PcdCName = ''
         self.Value = ''
         self.Offset = ''
-        if self.ValidUsage == None:
+        if self.ValidUsage is None:
             self.ValidUsage = []
         self.SkuInfoList = SkuInfoList
-        if self.SkuInfoList  == None:
+        if self.SkuInfoList  is None:
             self.SkuInfoList  = {}
         self.SupModuleList = SupModuleList
-        if self.SupModuleList == None:
+        if self.SupModuleList is None:
             self.SupModuleList = []
         CommonClass.__init__(self)
         self.PcdErrors = []

@@ -5,8 +5,9 @@
 #  It also provides the definitions(including PPIs/PROTOCOLs/GUIDs and library classes)
 #  and libraries instances, which are used for those features.
 #
-# Copyright (c) 2009 - 2017, Intel Corporation. All rights reserved.<BR>
+# Copyright (c) 2009 - 2018, Intel Corporation. All rights reserved.<BR>
 # (C) Copyright 2015 Hewlett Packard Enterprise Development LP <BR>
+# Copyright (c) 2017, Microsoft Corporation.  All rights reserved. <BR>
 # This program and the accompanying materials are licensed and made available under
 # the terms and conditions of the BSD License which accompanies this distribution.
 # The full text of the license may be found at
@@ -22,7 +23,7 @@
   PACKAGE_NAME                   = SecurityPkg
   PACKAGE_UNI_FILE               = SecurityPkg.uni
   PACKAGE_GUID                   = 4EFC4F66-6219-4427-B780-FB99F470767F
-  PACKAGE_VERSION                = 0.97
+  PACKAGE_VERSION                = 0.98
 
 [Includes]
   Include
@@ -63,15 +64,7 @@
   ##  @libraryclass  Provides TPM Interface Specification (TIS) interfaces for TPM command.
   #
   TpmCommLib|Include/Library/TpmCommLib.h
-  
-  ##  @libraryclass  Provides interfaces to handle TPM 2.0 request.
-  #
-  TrEEPhysicalPresenceLib|Include/Library/TrEEPhysicalPresenceLib.h
-  
-  ##  @libraryclass  Provides support for TrEE PP >= 128 Vendor Specific PPI Operation.
-  #
-  TrEEPpVendorLib|Include/Library/TrEEPpVendorLib.h
-  
+
   ##  @libraryclass  Provides support for TCG Physical Presence Interface (PPI) specification 
   #   >= 128 Vendor Specific PPI Operation.
   #
@@ -88,10 +81,6 @@
   ## @libraryclass  Provides interfaces about TCG storage Opal generic commond.
   #
   TcgStorageOpalLib|Include/Library/TcgStorageOpalLib.h
-
-  ## @libraryclass  Provides interfaces about Opal commond special for Opal password solution.
-  #
-  OpalPasswordSupportLib|Include/Library/OpalPasswordSupportLib.h
 
 [Guids]
   ## Security package token space guid.
@@ -178,10 +167,6 @@
   #  Include/Guid/SecureBootConfigHii.h
   gSecureBootConfigFormSetGuid       = { 0x5daf50a5, 0xea81, 0x4de2, {0x8f, 0x9b, 0xca, 0xbd, 0xa9, 0xcf, 0x5c, 0x14}}
 
-  ## GUID used to "TrEEPhysicalPresence" variable and "TrEEPhysicalPresenceFlags" variable for TPM2 request and response.
-  #  Include/Guid/TrEEPhysicalPresenceData.h
-  gEfiTrEEPhysicalPresenceGuid = { 0xf24643c2, 0xc622, 0x494e, { 0x8a, 0xd, 0x46, 0x32, 0x57, 0x9c, 0x2d, 0x5b }}
-
   ## GUID value used for PcdTpmInstanceGuid to indicate TPM is disabled.
   #  Include/Guid/TpmInstance.h
   gEfiTpmDeviceInstanceNoneGuid      = { 0x00000000, 0x0000, 0x0000, { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 } }
@@ -197,10 +182,6 @@
   ## GUID used to select supported TPM instance from UI.
   #  Include/Guid/TpmInstance.h
   gEfiTpmDeviceSelectedGuid          = { 0x7f4158d3, 0x74d, 0x456d, { 0x8c, 0xb2, 0x1, 0xf9, 0xc8, 0xf7, 0x9d, 0xaa } }
-
-  ## GUID used for FormSet and config variable.
-  #  Include/Guid/TrEEConfigHii.h
-  gTrEEConfigFormSetGuid              = {0xc54b425f, 0xaa79, 0x48b4, { 0x98, 0x1f, 0x99, 0x8b, 0x3c, 0x4b, 0x64, 0x1c }}
 
   ## Include/OpalPasswordExtraInfoVariable.h
   gOpalExtraInfoVariableGuid =  {0x44a2ad5d, 0x612c, 0x47b3, {0xb0, 0x6e, 0xc8, 0xf5, 0x0b, 0xfb, 0xf0, 0x7d}}
@@ -222,6 +203,9 @@
   ## Include/Ppi/FirmwareVolumeInfoMeasurementExcluded.h
   gEfiPeiFirmwareVolumeInfoMeasurementExcludedPpiGuid = { 0x6e056ff9, 0xc695, 0x4364, { 0x9e, 0x2c, 0x61, 0x26, 0xf5, 0xce, 0xea, 0xae } }
 
+  ## Include/Ppi/FirmwareVolumeInfoPrehashedFV.h
+  gEdkiiPeiFirmwareVolumeInfoPrehashedFvPpiGuid = { 0x3ce1e631, 0x7008, 0x477c, { 0xad, 0xa7, 0x5d, 0xcf, 0xc7, 0xc1, 0x49, 0x4b } }
+
 #
 # [Error.gEfiSecurityPkgTokenSpaceGuid]
 #   0x80000001 | Invalid value provided.
@@ -230,18 +214,6 @@
 #
 
 [PcdsFixedAtBuild, PcdsPatchableInModule]
-  ## Image verification policy for OptionRom. Only following values are valid:<BR><BR>
-  #  NOTE: Do NOT use 0x5 and 0x2 since it violates the UEFI specification and has been removed.<BR>
-  #  0x00000000      Always trust the image.<BR>
-  #  0x00000001      Never trust the image.<BR>
-  #  0x00000002      Allow execution when there is security violation.<BR>
-  #  0x00000003      Defer execution when there is security violation.<BR>
-  #  0x00000004      Deny execution when there is security violation.<BR>
-  #  0x00000005      Query user when there is security violation.<BR>
-  # @Prompt Set policy for the image from OptionRom.
-  # @ValidRange 0x80000001 | 0x00000000 - 0x00000005
-  gEfiSecurityPkgTokenSpaceGuid.PcdOptionRomImageVerificationPolicy|0x04|UINT32|0x00000001
-
   ## Image verification policy for removable media which includes CD-ROM, Floppy, USB and network.
   #  Only following values are valid:<BR><BR>
   #  NOTE: Do NOT use 0x5 and 0x2 since it violates the UEFI specification and has been removed.<BR>
@@ -304,6 +276,18 @@
   gEfiSecurityPkgTokenSpaceGuid.PcdStatusCodeSubClassTpmDevice|0x010D0000|UINT32|0x00000007
 
 [PcdsFixedAtBuild, PcdsPatchableInModule, PcdsDynamic, PcdsDynamicEx]
+  ## Image verification policy for OptionRom. Only following values are valid:<BR><BR>
+  #  NOTE: Do NOT use 0x5 and 0x2 since it violates the UEFI specification and has been removed.<BR>
+  #  0x00000000      Always trust the image.<BR>
+  #  0x00000001      Never trust the image.<BR>
+  #  0x00000002      Allow execution when there is security violation.<BR>
+  #  0x00000003      Defer execution when there is security violation.<BR>
+  #  0x00000004      Deny execution when there is security violation.<BR>
+  #  0x00000005      Query user when there is security violation.<BR>
+  # @Prompt Set policy for the image from OptionRom.
+  # @ValidRange 0x80000001 | 0x00000000 - 0x00000005
+  gEfiSecurityPkgTokenSpaceGuid.PcdOptionRomImageVerificationPolicy|0x04|UINT32|0x00000001
+
   ## Indicates the presence or absence of the platform operator during firmware booting.
   #  If platform operator is not physical presence during boot. TPM will be locked and the TPM commands 
   #  that required operator physical presence can not run.<BR><BR>
@@ -446,11 +430,22 @@
   # @Prompt Initial setting of TCG2 Persistent Firmware Management Flags
   gEfiSecurityPkgTokenSpaceGuid.PcdTcg2PhysicalPresenceFlags|0x300E2|UINT32|0x0001001B
 
+  ## Indicate current TPM2 Interrupt Number reported by _CRS control method.<BR><BR>
+  # TPM2 Interrupt feature is disabled If the pcd is set to 0.<BR>
+  # @Prompt Current TPM2 Interrupt Number
+  gEfiSecurityPkgTokenSpaceGuid.PcdTpm2CurrentIrqNum|0x00|UINT32|0x0001001C
+
+  ## Indicate platform possible TPM2 Interrupt Number reported by _PRS control method.<BR><BR>
+  # Possible TPM2 Interrupt Number Buffer will not be reported if TPM2 Interrupt feature is disabled.<BR>
+  # @Prompt Possible TPM2 Interrupt Number buffer
+  gEfiSecurityPkgTokenSpaceGuid.PcdTpm2PossibleIrqNumBuf|{0x00, 0x00, 0x00, 0x00}|VOID*|0x0001001D
+
 [PcdsDynamic, PcdsDynamicEx]
 
-  ## This PCD indicates Hash mask for TPM 2.0.<BR><BR>
+  ## This PCD indicates Hash mask for TPM 2.0. Bit definition strictly follows TCG Algorithm Registry.<BR><BR>
   #  If this bit is set, that means this algorithm is needed to extend to PCR.<BR>
   #  If this bit is clear, that means this algorithm is NOT needed to extend to PCR.<BR>
+  #  If all the bits are clear, that means hash algorithm is determined by current Active PCR Banks.<BR>
   #    BIT0  -  SHA1.<BR>
   #    BIT1  -  SHA256.<BR>
   #    BIT2  -  SHA384.<BR>

@@ -67,6 +67,8 @@
   BaseLibInternals.h
 
 [Sources.Ia32]
+  Ia32/WriteTr.nasm
+
   Ia32/Wbinvd.c | MSFT 
   Ia32/WriteMm7.c | MSFT 
   Ia32/WriteMm6.c | MSFT 
@@ -447,6 +449,7 @@
   X64/EnableCache.asm
   X64/DisableCache.nasm
   X64/DisableCache.asm
+  X64/WriteTr.nasm
 
   X64/CpuBreakpoint.c | MSFT 
   X64/WriteMsr64.c | MSFT 
@@ -821,8 +824,9 @@
 [Sources.ARM]
   Arm/InternalSwitchStack.c
   Arm/Unaligned.c
-  Math64.c                   | RVCT 
-    
+  Math64.c                   | RVCT
+  Math64.c                   | MSFT
+
   Arm/SwitchStack.asm        | RVCT
   Arm/SetJumpLongJump.asm    | RVCT
   Arm/DisableInterrupts.asm  | RVCT
@@ -831,7 +835,16 @@
   Arm/CpuPause.asm           | RVCT
   Arm/CpuBreakpoint.asm      | RVCT
   Arm/MemoryFence.asm        | RVCT
- 
+
+  Arm/SwitchStack.asm        | MSFT
+  Arm/SetJumpLongJump.asm    | MSFT
+  Arm/DisableInterrupts.asm  | MSFT
+  Arm/EnableInterrupts.asm   | MSFT
+  Arm/GetInterruptsState.asm | MSFT
+  Arm/CpuPause.asm           | MSFT
+  Arm/CpuBreakpoint.asm      | MSFT
+  Arm/MemoryFence.asm        | MSFT
+
   Arm/Math64.S                  | GCC
   Arm/SwitchStack.S             | GCC
   Arm/EnableInterrupts.S        | GCC
@@ -853,6 +866,14 @@
   AArch64/GetInterruptsState.S      | GCC
   AArch64/SetJumpLongJump.S         | GCC
   AArch64/CpuBreakpoint.S           | GCC
+
+  AArch64/MemoryFence.asm           | MSFT
+  AArch64/SwitchStack.asm           | MSFT
+  AArch64/EnableInterrupts.asm      | MSFT
+  AArch64/DisableInterrupts.asm     | MSFT
+  AArch64/GetInterruptsState.asm    | MSFT
+  AArch64/SetJumpLongJump.asm       | MSFT
+  AArch64/CpuBreakpoint.asm         | MSFT
 
 [Packages]
   MdePkg/MdePkg.dec

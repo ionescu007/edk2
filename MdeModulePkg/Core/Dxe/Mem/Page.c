@@ -14,6 +14,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
 #include "DxeMain.h"
 #include "Imem.h"
+#include "HeapGuard.h"
 
 //
 // Entry for tracking the memory regions for each memory type to coalesce similar memory types
@@ -188,7 +189,9 @@ CoreAddRange (
   // used for other purposes.
   //  
   if (Type == EfiConventionalMemory && Start == 0 && (End >= EFI_PAGE_SIZE - 1)) {
-    SetMem ((VOID *)(UINTN)Start, EFI_PAGE_SIZE, 0);
+    if ((PcdGet8 (PcdNullPointerDetectionPropertyMask) & BIT0) == 0) {
+      SetMem ((VOID *)(UINTN)Start, EFI_PAGE_SIZE, 0);
+    }
   }
   
   //
@@ -285,9 +288,12 @@ AllocateMemoryMapEntry (
     //
     // The list is empty, to allocate one page to refuel the list
     //
-    FreeDescriptorEntries = CoreAllocatePoolPages (EfiBootServicesData,
+    FreeDescriptorEntries = CoreAllocatePoolPages (
+                              EfiBootServicesData,
                               EFI_SIZE_TO_PAGES (DEFAULT_PAGE_ALLOCATION_GRANULARITY),
-                              DEFAULT_PAGE_ALLOCATION_GRANULARITY);
+                              DEFAULT_PAGE_ALLOCATION_GRANULARITY,
+                              FALSE
+                              );
     if (FreeDescriptorEntries != NULL) {
       //
       // Enque the free memmory map entries into the list
@@ -991,6 +997,7 @@ CoreUpdateMemoryAttributes (
   @param  NewType                The type of memory the range is going to be
                                  turned into
   @param  Alignment              Bits to align with
+  @param  NeedGuard              Flag to indicate Guard page is needed or not
 
   @return The base address of the range, or 0 if the range was not found
 
@@ -1001,7 +1008,8 @@ CoreFindFreePagesI (
   IN UINT64           MinAddress,
   IN UINT64           NumberOfPages,
   IN EFI_MEMORY_TYPE  NewType,
-  IN UINTN            Alignment
+  IN UINTN            Alignment,
+  IN BOOLEAN          NeedGuard
   )
 {
   UINT64          NumberOfBytes;
@@ -1093,6 +1101,17 @@ CoreFindFreePagesI (
       // If this is the best match so far remember it
       //
       if (DescEnd > Target) {
+        if (NeedGuard) {
+          DescEnd = AdjustMemoryS (
+                      DescEnd + 1 - DescNumberOfBytes,
+                      DescNumberOfBytes,
+                      NumberOfBytes
+                      );
+          if (DescEnd == 0) {
+            continue;
+          }
+        }
+
         Target = DescEnd;
       }
     }
@@ -1123,6 +1142,7 @@ CoreFindFreePagesI (
   @param  NewType                The type of memory the range is going to be
                                  turned into
   @param  Alignment              Bits to align with
+  @param  NeedGuard              Flag to indicate Guard page is needed or not
 
   @return The base address of the range, or 0 if the range was not found.
 
@@ -1132,7 +1152,8 @@ FindFreePages (
     IN UINT64           MaxAddress,
     IN UINT64           NoPages,
     IN EFI_MEMORY_TYPE  NewType,
-    IN UINTN            Alignment
+    IN UINTN            Alignment,
+    IN BOOLEAN          NeedGuard
     )
 {
   UINT64   Start;
@@ -1146,7 +1167,8 @@ FindFreePages (
               mMemoryTypeStatistics[NewType].BaseAddress, 
               NoPages, 
               NewType, 
-              Alignment
+              Alignment,
+              NeedGuard
               );
     if (Start != 0) {
       return Start;
@@ -1157,7 +1179,8 @@ FindFreePages (
   // Attempt to find free pages in the default allocation bin
   //
   if (MaxAddress >= mDefaultMaximumAddress) {
-    Start = CoreFindFreePagesI (mDefaultMaximumAddress, 0, NoPages, NewType, Alignment);
+    Start = CoreFindFreePagesI (mDefaultMaximumAddress, 0, NoPages, NewType,
+                                Alignment, NeedGuard);
     if (Start != 0) {
       if (Start < mDefaultBaseAddress) {
         mDefaultBaseAddress = Start;
@@ -1172,7 +1195,8 @@ FindFreePages (
   // address range.  If this allocation fails, then there are not enough 
   // resources anywhere to satisfy the request.
   //
-  Start = CoreFindFreePagesI (MaxAddress, 0, NoPages, NewType, Alignment);
+  Start = CoreFindFreePagesI (MaxAddress, 0, NoPages, NewType, Alignment,
+                              NeedGuard);
   if (Start != 0) {
     return Start;
   }
@@ -1187,7 +1211,7 @@ FindFreePages (
   //
   // If any memory resources were promoted, then re-attempt the allocation
   //
-  return FindFreePages (MaxAddress, NoPages, NewType, Alignment);
+  return FindFreePages (MaxAddress, NoPages, NewType, Alignment, NeedGuard);
 }
 
 
@@ -1200,6 +1224,7 @@ FindFreePages (
   @param  NumberOfPages          The number of pages to allocate
   @param  Memory                 A pointer to receive the base allocated memory
                                  address
+  @param  NeedGuard              Flag to indicate Guard page is needed or not
 
   @return Status. On success, Memory is filled in with the base address allocated
   @retval EFI_INVALID_PARAMETER  Parameters violate checking rules defined in
@@ -1215,7 +1240,8 @@ CoreInternalAllocatePages (
   IN EFI_ALLOCATE_TYPE      Type,
   IN EFI_MEMORY_TYPE        MemoryType,
   IN UINTN                  NumberOfPages,
-  IN OUT EFI_PHYSICAL_ADDRESS  *Memory
+  IN OUT EFI_PHYSICAL_ADDRESS  *Memory,
+  IN BOOLEAN                NeedGuard
   )
 {
   EFI_STATUS      Status;
@@ -1301,7 +1327,8 @@ CoreInternalAllocatePages (
   // If not a specific address, then find an address to allocate
   //
   if (Type != AllocateAddress) {
-    Start = FindFreePages (MaxAddress, NumberOfPages, MemoryType, Alignment);
+    Start = FindFreePages (MaxAddress, NumberOfPages, MemoryType, Alignment,
+                           NeedGuard);
     if (Start == 0) {
       Status = EFI_OUT_OF_RESOURCES;
       goto Done;
@@ -1311,12 +1338,19 @@ CoreInternalAllocatePages (
   //
   // Convert pages from FreeMemory to the requested type
   //
-  Status = CoreConvertPages (Start, NumberOfPages, MemoryType);
+  if (NeedGuard) {
+    Status = CoreConvertPagesWithGuard(Start, NumberOfPages, MemoryType);
+  } else {
+    Status = CoreConvertPages(Start, NumberOfPages, MemoryType);
+  }
 
 Done:
   CoreReleaseMemoryLock ();
 
   if (!EFI_ERROR (Status)) {
+    if (NeedGuard) {
+      SetGuardForMemory (Start, NumberOfPages);
+    }
     *Memory = Start;
   }
 
@@ -1351,8 +1385,11 @@ CoreAllocatePages (
   )
 {
   EFI_STATUS  Status;
+  BOOLEAN     NeedGuard;
 
-  Status = CoreInternalAllocatePages (Type, MemoryType, NumberOfPages, Memory);
+  NeedGuard = IsPageTypeToGuard (MemoryType, Type) && !mOnGuarding;
+  Status = CoreInternalAllocatePages (Type, MemoryType, NumberOfPages, Memory,
+                                      NeedGuard);
   if (!EFI_ERROR (Status)) {
     CoreUpdateProfile (
       (EFI_PHYSICAL_ADDRESS) (UINTN) RETURN_ADDRESS (0),
@@ -1393,6 +1430,7 @@ CoreInternalFreePages (
   LIST_ENTRY      *Link;
   MEMORY_MAP      *Entry;
   UINTN           Alignment;
+  BOOLEAN         IsGuarded;
 
   //
   // Free the range
@@ -1402,6 +1440,7 @@ CoreInternalFreePages (
   //
   // Find the entry that the covers the range
   //
+  IsGuarded = FALSE;
   Entry = NULL;
   for (Link = gMemoryMap.ForwardLink; Link != &gMemoryMap; Link = Link->ForwardLink) {
     Entry = CR(Link, MEMORY_MAP, Link, MEMORY_MAP_SIGNATURE);
@@ -1438,10 +1477,13 @@ CoreInternalFreePages (
     *MemoryType = Entry->Type;
   }
 
-  Status = CoreConvertPages (Memory, NumberOfPages, EfiConventionalMemory);
-
-  if (EFI_ERROR (Status)) {
-    goto Done;
+  IsGuarded = IsPageTypeToGuard (Entry->Type, AllocateAnyPages) &&
+              IsMemoryGuarded (Memory);
+  if (IsGuarded) {
+    Status = CoreConvertPagesWithGuard (Memory, NumberOfPages,
+                                        EfiConventionalMemory);
+  } else {
+    Status = CoreConvertPages (Memory, NumberOfPages, EfiConventionalMemory);
   }
 
 Done:
@@ -1618,6 +1660,7 @@ CoreGetMemoryMap (
   EFI_GCD_MAP_ENTRY                 MergeGcdMapEntry;
   EFI_MEMORY_TYPE                   Type;
   EFI_MEMORY_DESCRIPTOR             *MemoryMapStart;
+  EFI_MEMORY_DESCRIPTOR             *MemoryMapEnd;
 
   //
   // Make sure the parameters are valid
@@ -1635,7 +1678,7 @@ CoreGetMemoryMap (
   NumberOfEntries = 0;
   for (Link = mGcdMemorySpaceMap.ForwardLink; Link != &mGcdMemorySpaceMap; Link = Link->ForwardLink) {
     GcdMapEntry = CR (Link, EFI_GCD_MAP_ENTRY, Link, EFI_GCD_MAP_SIGNATURE);
-    if ((GcdMapEntry->GcdMemoryType == EfiGcdMemoryTypePersistentMemory) || 
+    if ((GcdMapEntry->GcdMemoryType == EfiGcdMemoryTypePersistent) || 
         (GcdMapEntry->GcdMemoryType == EfiGcdMemoryTypeReserved) ||
         ((GcdMapEntry->GcdMemoryType == EfiGcdMemoryTypeMemoryMappedIo) &&
         ((GcdMapEntry->Attributes & EFI_MEMORY_RUNTIME) == EFI_MEMORY_RUNTIME))) {
@@ -1783,7 +1826,7 @@ CoreGetMemoryMap (
       MemoryMap = MergeMemoryMapDescriptor (MemoryMapStart, MemoryMap, Size);
     }
     
-    if (MergeGcdMapEntry.GcdMemoryType == EfiGcdMemoryTypePersistentMemory) {
+    if (MergeGcdMapEntry.GcdMemoryType == EfiGcdMemoryTypePersistent) {
       //
       // Page Align GCD range is required. When it is converted to EFI_MEMORY_DESCRIPTOR, 
       // it will be recorded as page PhysicalStart and NumberOfPages. 
@@ -1827,6 +1870,27 @@ CoreGetMemoryMap (
   //
   BufferSize = ((UINT8 *)MemoryMap - (UINT8 *)MemoryMapStart);
 
+  //
+  // Note: Some OSs will treat EFI_MEMORY_DESCRIPTOR.Attribute as really
+  //       set attributes and change memory paging attribute accordingly.
+  //       But current EFI_MEMORY_DESCRIPTOR.Attribute is assigned by
+  //       value from Capabilities in GCD memory map. This might cause
+  //       boot problems. Clearing all paging related capabilities can
+  //       workaround it. Following code is supposed to be removed once
+  //       the usage of EFI_MEMORY_DESCRIPTOR.Attribute is clarified in
+  //       UEFI spec and adopted by both EDK-II Core and all supported
+  //       OSs.
+  //
+  MemoryMapEnd = MemoryMap;
+  MemoryMap = MemoryMapStart;
+  while (MemoryMap < MemoryMapEnd) {
+    MemoryMap->Attribute &= ~(UINT64)(EFI_MEMORY_RP | EFI_MEMORY_RO |
+                                      EFI_MEMORY_XP);
+    MemoryMap = NEXT_MEMORY_DESCRIPTOR (MemoryMap, Size);
+  }
+  MergeMemoryMap (MemoryMapStart, &BufferSize, Size);
+  MemoryMapEnd = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)MemoryMapStart + BufferSize);
+
   Status = EFI_SUCCESS;
 
 Done:
@@ -1843,6 +1907,12 @@ Done:
 
   *MemoryMapSize = BufferSize;
 
+  DEBUG_CODE (
+    if (PcdGet8 (PcdHeapGuardPropertyMask) & (BIT1|BIT0)) {
+      DumpGuardedMemoryBitmap ();
+    }
+  );
+
   return Status;
 }
 
@@ -1854,6 +1924,7 @@ Done:
   @param  PoolType               The type of memory for the new pool pages
   @param  NumberOfPages          No of pages to allocate
   @param  Alignment              Bits to align.
+  @param  NeedGuard              Flag to indicate Guard page is needed or not
 
   @return The allocated memory, or NULL
 
@@ -1862,7 +1933,8 @@ VOID *
 CoreAllocatePoolPages (
   IN EFI_MEMORY_TYPE    PoolType,
   IN UINTN              NumberOfPages,
-  IN UINTN              Alignment
+  IN UINTN              Alignment,
+  IN BOOLEAN            NeedGuard
   )
 {
   UINT64            Start;
@@ -1870,7 +1942,8 @@ CoreAllocatePoolPages (
   //
   // Find the pages to convert
   //
-  Start = FindFreePages (MAX_ADDRESS, NumberOfPages, PoolType, Alignment);
+  Start = FindFreePages (MAX_ADDRESS, NumberOfPages, PoolType, Alignment,
+                         NeedGuard);
 
   //
   // Convert it to boot services data
@@ -1878,7 +1951,11 @@ CoreAllocatePoolPages (
   if (Start == 0) {
     DEBUG ((DEBUG_ERROR | DEBUG_PAGE, "AllocatePoolPages: failed to allocate %d pages\n", (UINT32)NumberOfPages));
   } else {
-    CoreConvertPages (Start, NumberOfPages, PoolType);
+    if (NeedGuard) {
+      CoreConvertPagesWithGuard (Start, NumberOfPages, PoolType);
+    } else {
+      CoreConvertPages (Start, NumberOfPages, PoolType);
+    }
   }
 
   return (VOID *)(UINTN) Start;

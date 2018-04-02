@@ -262,7 +262,6 @@
   gEfiI2cEnumerateProtocolGuid                            ## UNDEFINED
   gEfiI2cHostProtocolGuid                                 ## UNDEFINED
   gEfiI2cBusConfigurationManagementProtocolGuid           ## UNDEFINED
-  gEfiTrEEProtocolGuid                                    ## UNDEFINED
   gEfiTcg2ProtocolGuid                                    ## UNDEFINED
   gEfiTimestampProtocolGuid                               ## UNDEFINED
   gEfiRngProtocolGuid                                     ## UNDEFINED
@@ -335,7 +334,7 @@
 
 [Guids]
   gEfiFileInfoGuid                                        ## UNDEFINED
-  gEfiShellEnvironment2ExtGuid                            ## CONSUMES ## GUID
+  gEfiShellEnvironment2ExtGuid                            ## SOMETIMES_CONSUMES ## GUID
   gEfiPcAnsiGuid                                          ## UNDEFINED
   gEfiVT100Guid                                           ## UNDEFINED
   gEfiVT100PlusGuid                                       ## UNDEFINED

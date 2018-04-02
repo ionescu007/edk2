@@ -1,7 +1,7 @@
 ## @file
 # process OptionROM generation
 #
-#  Copyright (c) 2007 - 2016, Intel Corporation. All rights reserved.<BR>
+#  Copyright (c) 2007 - 2017, Intel Corporation. All rights reserved.<BR>
 #
 #  This program and the accompanying materials
 #  are licensed and made available under the terms and conditions of the BSD License
@@ -49,9 +49,9 @@ class OPTIONROM (OptionRomClassObject):
     #   @param  Buffer      The buffer generated OptROM data will be put
     #   @retval string      Generated OptROM file path
     #
-    def AddToBuffer (self, Buffer) :
-
-        GenFdsGlobalVariable.InfLogger( "\nGenerating %s Option ROM ..." %self.DriverName)
+    def AddToBuffer (self, Buffer, Flag=False) :
+        if not Flag:
+            GenFdsGlobalVariable.InfLogger( "\nGenerating %s Option ROM ..." %self.DriverName)
 
         EfiFileList = []
         BinFileList = []
@@ -60,10 +60,10 @@ class OPTIONROM (OptionRomClassObject):
         for FfsFile in self.FfsList :
             
             if isinstance(FfsFile, OptRomInfStatement.OptRomInfStatement):
-                FilePathNameList = FfsFile.GenFfs()
+                FilePathNameList = FfsFile.GenFfs(IsMakefile=Flag)
                 if len(FilePathNameList) == 0:
                     EdkLogger.error("GenFds", GENFDS_ERROR, "Module %s not produce .efi files, so NO file could be put into option ROM." % (FfsFile.InfFileName))
-                if FfsFile.OverrideAttribs == None:
+                if FfsFile.OverrideAttribs is None:
                     EfiFileList.extend(FilePathNameList)
                 else:
                     FileName = os.path.basename(FilePathNameList[0])
@@ -79,11 +79,12 @@ class OPTIONROM (OptionRomClassObject):
                                                            FfsFile.OverrideAttribs.PciClassCode, 
                                                            FfsFile.OverrideAttribs.PciRevision, 
                                                            FfsFile.OverrideAttribs.PciDeviceId, 
-                                                           FfsFile.OverrideAttribs.PciVendorId)
+                                                           FfsFile.OverrideAttribs.PciVendorId,
+                                                           IsMakefile = Flag)
                     BinFileList.append(TmpOutputFile)
             else:
-                FilePathName = FfsFile.GenFfs()
-                if FfsFile.OverrideAttribs != None:
+                FilePathName = FfsFile.GenFfs(IsMakefile=Flag)
+                if FfsFile.OverrideAttribs is not None:
                     FileName = os.path.basename(FilePathName)
                     TmpOutputDir = os.path.join(GenFdsGlobalVariable.FvDir, self.DriverName, FfsFile.CurrentArch)
                     if not os.path.exists(TmpOutputDir) :
@@ -97,7 +98,8 @@ class OPTIONROM (OptionRomClassObject):
                                                            FfsFile.OverrideAttribs.PciClassCode, 
                                                            FfsFile.OverrideAttribs.PciRevision, 
                                                            FfsFile.OverrideAttribs.PciDeviceId, 
-                                                           FfsFile.OverrideAttribs.PciVendorId)
+                                                           FfsFile.OverrideAttribs.PciVendorId,
+                                                           IsMakefile=Flag)
                     BinFileList.append(TmpOutputFile)
                 else:
                     if FfsFile.FileType == 'EFI':
@@ -114,10 +116,11 @@ class OPTIONROM (OptionRomClassObject):
         GenFdsGlobalVariable.GenerateOptionRom(
                                 OutputFile,
                                 EfiFileList,
-                                BinFileList
-                                )
+                                BinFileList,
+                                IsMakefile=Flag)
 
-        GenFdsGlobalVariable.InfLogger( "\nGenerate %s Option ROM Successfully" %self.DriverName)
+        if not Flag:
+            GenFdsGlobalVariable.InfLogger( "\nGenerate %s Option ROM Successfully" %self.DriverName)
         GenFdsGlobalVariable.SharpCounter = 0
         
         return OutputFile

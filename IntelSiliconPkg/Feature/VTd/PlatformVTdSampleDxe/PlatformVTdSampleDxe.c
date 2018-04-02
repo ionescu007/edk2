@@ -1,7 +1,10 @@
 /** @file
   Platform VTd Sample driver.
 
-  Copyright (c) 2017, Intel Corporation. All rights reserved.<BR>
+  Note: This module should only be used for dev/debug purposes.
+        It MUST never be used for production builds.
+
+  Copyright (c) 2017 - 2018, Intel Corporation. All rights reserved.<BR>
   This program and the accompanying materials
   are licensed and made available under the terms and conditions of the BSD License
   which accompanies this distribution.  The full text of the license may be found at
@@ -359,6 +362,7 @@ PlatformVTdGetExceptionDeviceList (
   // Uncomment to take affect and comment the sample codes for device scope
   // based exception list.
   //
+  /*
   *DeviceInfo = AllocateZeroPool (sizeof(mExceptionPciDeviceIdList));
   if (*DeviceInfo == NULL) {
     return EFI_OUT_OF_RESOURCES;
@@ -366,8 +370,8 @@ PlatformVTdGetExceptionDeviceList (
   CopyMem (*DeviceInfo, mExceptionPciDeviceIdList, sizeof(mExceptionPciDeviceIdList));
 
   *DeviceInfoCount = ARRAY_SIZE(mExceptionPciDeviceIdList);
-
-  return EFI_SUCCESS;
+  */
+  return EFI_UNSUPPORTED;
 }
 
 EDKII_PLATFORM_VTD_POLICY_PROTOCOL  mPlatformVTdSample = {

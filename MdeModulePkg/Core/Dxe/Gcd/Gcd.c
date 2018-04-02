@@ -16,6 +16,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
 #include "DxeMain.h"
 #include "Gcd.h"
+#include "Mem/HeapGuard.h"
 
 #define MINIMUM_INITIAL_MEMORY_SIZE 0x10000
 
@@ -115,7 +116,7 @@ GLOBAL_REMOVE_IF_UNREFERENCED CONST CHAR8 *mGcdMemoryTypeNames[] = {
   "Reserved ",  // EfiGcdMemoryTypeReserved
   "SystemMem",  // EfiGcdMemoryTypeSystemMemory
   "MMIO     ",  // EfiGcdMemoryTypeMemoryMappedIo
-  "PersisMem",  // EfiGcdMemoryTypePersistentMemory
+  "PersisMem",  // EfiGcdMemoryTypePersistent
   "MoreRelia",  // EfiGcdMemoryTypeMoreReliable
   "Unknown  "   // EfiGcdMemoryTypeMaximum
 };
@@ -391,12 +392,21 @@ CoreAllocateGcdMapEntry (
   IN OUT EFI_GCD_MAP_ENTRY  **BottomEntry
   )
 {
+  //
+  // Set to mOnGuarding to TRUE before memory allocation. This will make sure
+  // that the entry memory is not "guarded" by HeapGuard. Otherwise it might
+  // cause problem when it's freed (if HeapGuard is enabled).
+  //
+  mOnGuarding = TRUE;
   *TopEntry = AllocateZeroPool (sizeof (EFI_GCD_MAP_ENTRY));
+  mOnGuarding = FALSE;
   if (*TopEntry == NULL) {
     return EFI_OUT_OF_RESOURCES;
   }
 
+  mOnGuarding = TRUE;
   *BottomEntry = AllocateZeroPool (sizeof (EFI_GCD_MAP_ENTRY));
+  mOnGuarding = FALSE;
   if (*BottomEntry == NULL) {
     CoreFreePool (*TopEntry);
     return EFI_OUT_OF_RESOURCES;
@@ -662,11 +672,6 @@ ConverToCpuArchAttributes (
   )
 {
   UINT64      CpuArchAttributes;
-
-  if ((Attributes & ~(EXCLUSIVE_MEMORY_ATTRIBUTES |
-                      NONEXCLUSIVE_MEMORY_ATTRIBUTES)) != 0) {
-    return INVALID_CPU_ARCH_ATTRIBUTES;
-  }
 
   CpuArchAttributes = Attributes & NONEXCLUSIVE_MEMORY_ATTRIBUTES;
 
@@ -2416,7 +2421,7 @@ CoreInitializeGcdServices (
           GcdMemoryType = EfiGcdMemoryTypeReserved;
         }
         if ((ResourceHob->ResourceAttribute & EFI_RESOURCE_ATTRIBUTE_PERSISTENT) == EFI_RESOURCE_ATTRIBUTE_PERSISTENT) {
-          GcdMemoryType = EfiGcdMemoryTypePersistentMemory;
+          GcdMemoryType = EfiGcdMemoryTypePersistent;
         }
         break;
       case EFI_RESOURCE_MEMORY_MAPPED_IO:
